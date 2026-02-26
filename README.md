@@ -52,7 +52,7 @@ bun add -g repo-context-mcp
 
 ### OpenCode
 
-Add to your `opencode.json`:
+Add to your `opencode.json` (project root or `~/.config/opencode/opencode.json`):
 
 ```json
 {
@@ -68,7 +68,7 @@ Add to your `opencode.json`:
 
 ### Claude Desktop
 
-Add to your `claude_desktop_config.json`:
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
 ```json
 {
@@ -83,7 +83,7 @@ Add to your `claude_desktop_config.json`:
 
 ### Cursor
 
-Add to your MCP settings:
+In Settings → MCP Servers, add:
 
 ```json
 {
@@ -95,6 +95,45 @@ Add to your MCP settings:
   }
 }
 ```
+
+### Cline (VS Code Extension)
+
+In Cline settings, MCP section:
+
+```json
+{
+  "repo-context": {
+    "command": "npx",
+    "args": ["repo-context-mcp"]
+  }
+}
+```
+
+### Windsurf
+
+Add to your MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "repo-context": {
+      "command": "npx",
+      "args": ["repo-context-mcp"]
+    }
+  }
+}
+```
+
+### Other AI Tools (Gemini, ChatGPT, etc.)
+
+These don't support MCP natively yet. You can manually generate context:
+
+```bash
+cd /your/project
+npx repo-context-mcp --analyze > context.md
+```
+
+Then paste `context.md` content into your chat.
 
 ## Usage
 
