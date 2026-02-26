@@ -1,0 +1,18 @@
+# Source files (we ship compiled)
+src/
+
+# Tests
+tests/
+
+# Config files
+tsconfig.json
+.gitignore
+.github/
+
+# IDE
+.idea/
+.vscode/
+
+# Development
+*.log
+coverage/
