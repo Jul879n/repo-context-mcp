@@ -2,24 +2,28 @@
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. **Better than CLAUDE.md** because it's dynamic, accurate, and uses minimal tokens.
 
-## What's New in v1.1.0
+## What's New in v1.2.0
 
-- **MCP Prompts**: Inject context without tool calls
-- **Auto-preload**: Context loads on connect
-- **Ultra format**: ~50 tokens for full context
-- **Smart caching**: TTL + file hash validation
+- **🔥 Hot Files Detection**: Auto-detects oversized files, high imports, TODO-dense code
+- **🔗 Import Graph**: Internal dependency map with hub files, orphans, and **mermaid diagrams**
+- **📋 Annotations**: Manage business rules, gotchas, and warnings via MCP tools (CRUD)
+- **📁 Largest File per Folder**: Structure shows the biggest file in each directory
+- **13 Tools + 10 Resources**: Up from 7+7 in v1.1.0
 
 ## Why Better Than CLAUDE.md?
 
-| Feature | CLAUDE.md | repo-context-mcp |
-|---------|-----------|------------------|
-| Auto-generated | No (manual) | Yes |
-| Always accurate | No (gets stale) | Yes |
-| Token usage | ~500-2000 | **~50-300** |
-| Detects endpoints | No | Yes |
-| Detects models | No | Yes |
-| Updates with code | No | Yes (auto-cache) |
-| MCP Resources | N/A | Yes (0 extra tokens) |
+| Feature                 | CLAUDE.md       | repo-context-mcp       |
+| ----------------------- | --------------- | ---------------------- |
+| Auto-generated          | No (manual)     | Yes                    |
+| Always accurate         | No (gets stale) | Yes                    |
+| Token usage             | ~500-2000       | **~50-350**            |
+| Detects endpoints       | No              | Yes                    |
+| Detects models          | No              | Yes                    |
+| Detects complex files   | No              | **Yes (hot files)**    |
+| Import dependency graph | No              | **Yes + mermaid**      |
+| Business rules/gotchas  | Manual only     | **CRUD via MCP tools** |
+| Updates with code       | No              | Yes (auto-cache)       |
+| MCP Resources           | N/A             | Yes (0 extra tokens)   |
 
 ## Token Efficiency
 
@@ -27,8 +31,8 @@ Universal MCP server that analyzes any codebase and provides structured context 
 Format        Tokens    Use Case
 ─────────────────────────────────────────
 minimal       ~50       Quick context awareness
-ultra         ~150      Conversation start
-compact       ~300      Full understanding (default)
+ultra         ~165      Conversation start
+compact       ~350      Full understanding (default)
 normal        ~800      Detailed exploration
 ```
 
@@ -44,12 +48,12 @@ npm install -g repo-context-mcp
 
 ```json
 {
-  "mcpServers": {
-    "repo-context": {
-      "command": "npx",
-      "args": ["repo-context-mcp"]
-    }
-  }
+	"mcpServers": {
+		"repo-context": {
+			"command": "npx",
+			"args": ["repo-context-mcp"]
+		}
+	}
 }
 ```
 
@@ -61,7 +65,7 @@ npm install -g repo-context-mcp
 # Start of conversation (default: compact format)
 get_project_context
 
-# Ultra-efficient (~150 tokens)
+# Ultra-efficient (~165 tokens)
 get_project_context { "format": "ultra" }
 
 # Minimal for quick awareness (~50 tokens)
@@ -74,6 +78,19 @@ get_project_endpoints
 get_project_models
 get_project_status
 
+# v1.2.0 — New intelligence tools
+get_project_hotfiles                              # Complex/oversized files
+get_project_imports                               # Dependency graph (text)
+get_project_imports { "format": "mermaid" }       # Dependency graph (visual)
+get_project_annotations                           # Business rules & gotchas
+
+# v1.2.0 — Annotation management
+add_annotation { "category": "businessRules", "text": "..." }
+add_annotation { "category": "gotchas", "text": "..." }
+add_annotation { "category": "warnings", "text": "..." }
+remove_annotation { "category": "gotchas", "index": 0 }
+list_annotations
+
 # After major changes
 refresh_project_context
 ```
@@ -82,34 +99,41 @@ refresh_project_context
 
 MCP Resources are automatically available to AI - no tool call needed:
 
-| Resource | Description |
-|----------|-------------|
-| `repo://context/summary` | ~50 token summary |
-| `repo://context/full` | Complete compact context |
-| `repo://context/stack` | Languages & frameworks |
-| `repo://context/structure` | Folders & entry points |
-| `repo://context/api` | API endpoints |
-| `repo://context/models` | Data models |
-| `repo://context.json` | Full JSON (programmatic) |
+| Resource                     | Description               |
+| ---------------------------- | ------------------------- |
+| `repo://context/summary`     | ~50 token summary         |
+| `repo://context/full`        | Complete compact context  |
+| `repo://context/stack`       | Languages & frameworks    |
+| `repo://context/structure`   | Folders & entry points    |
+| `repo://context/api`         | API endpoints             |
+| `repo://context/models`      | Data models               |
+| `repo://context/hotfiles`    | Complex/oversized files   |
+| `repo://context/annotations` | Business rules & gotchas  |
+| `repo://context/imports`     | Internal dependency graph |
+| `repo://context.json`        | Full JSON (programmatic)  |
 
 ## Output Formats
 
 ### Minimal (~50 tokens)
+
 ```
 my-app:typescript+nextjs [src/app/components/lib] entry:src/index.ts
 ```
 
-### Ultra (~150 tokens)
+### Ultra (~165 tokens)
+
 ```
 my-app|typescript|nextjs
-[src:45 app:20 components:15 lib:8]
+[src:45(⚠page.tsx:1200L) app:20 components:15 lib:8]
 →src/index.ts,src/app/page.tsx
 API(12):G:/api/users P:/api/auth
 M(5):User,Post,Comment
+⚠3hot|hub:store/index.ts(←12)|rules:2|gotchas:1
 [docs|test:25|docker|ci:github]
 ```
 
-### Compact (~300 tokens) - Default
+### Compact (~350 tokens) - Default
+
 ```
 # my-app (typescript)
 A modern web application
@@ -118,7 +142,7 @@ Stack: typescript, Next.js, React, pnpm
 Deps: next, react, prisma, zod
 
 Structure:
-  src/ (45) - Source code
+  src/ (45) - Source code ⚠page.tsx:1200L
   app/ (20) - Next.js app router
   components/ (15) - UI components
 Entry: src/index.ts, src/app/page.tsx
@@ -131,8 +155,59 @@ Models (5):
   User (model): id, email, name...
   Post (model): id, title, content...
 
+⚠ Hot Files (3):
+  src/app/page.tsx (1200L) - oversized
+  src/store/index.ts (800L) - oversized,high-imports
+
+Import hubs: store/index.ts(←12), utils/api.ts(←9)
+Orphans: legacy/parser.ts, utils/deprecated.ts
+
+📋 Business Rules:
+  - Schedules: ≥1min separation
+⚠ Gotchas:
+  - page.tsx: 1200+ lines, read by sections
+
 Status: tests:25 | docker | ci:github | todos:3
 ```
+
+## Hot Files Detection (v1.2.0)
+
+Automatically identifies problematic files based on:
+
+| Criterion     | Threshold | Why it matters                    |
+| ------------- | --------- | --------------------------------- |
+| Lines of code | > 300     | File too large to navigate easily |
+| Import count  | > 15      | High coupling                     |
+| Export count  | > 20      | Too many responsibilities         |
+| TODO density  | > 3       | Concentrated tech debt            |
+
+## Import Graph (v1.2.0)
+
+Analyzes internal `import`/`require` statements to build a dependency map:
+
+- **Hub files**: Most-imported files (core of the system)
+- **Orphan files**: Files nobody imports (possible dead code)
+- **Mermaid output**: Visual diagram with `get_project_imports { "format": "mermaid" }`
+
+## Annotations (v1.2.0)
+
+Manage project knowledge via MCP tools — no manual file editing needed:
+
+```bash
+# Add a business rule
+add_annotation { "category": "businessRules", "text": "Orders require payment before shipping" }
+
+# Add a gotcha
+add_annotation { "category": "gotchas", "text": "UserService.ts has 2000+ lines, read by sections" }
+
+# List all with indices
+list_annotations
+
+# Remove by index
+remove_annotation { "category": "gotchas", "index": 0 }
+```
+
+Annotations are persisted in `.repo-context-notes.json` and included in all context formats.
 
 ## Smart Caching
 
@@ -144,32 +219,35 @@ The cache file `.repo-context.json` is stored in your project root. Add to `.git
 
 ## Supported Languages
 
-| Language | Deps | Endpoints | Models |
-|----------|------|-----------|--------|
-| TypeScript/JS | package.json | Express, Fastify, Hono, NestJS, Next.js | Interfaces, Types, Classes |
-| Python | requirements.txt, pyproject.toml | FastAPI, Flask, Django | Pydantic, Dataclasses |
-| Rust | Cargo.toml | Actix, Axum, Rocket | Structs, Enums |
-| Go | go.mod | Gin, Echo, Fiber | Structs |
-| Java/Kotlin | pom.xml, build.gradle | Spring | Classes, Records |
-| PHP | composer.json | Laravel, Symfony | Classes |
-| Ruby | Gemfile | Rails, Sinatra | ActiveRecord |
-| C#/.NET | .csproj | ASP.NET | Classes, Records |
-| Swift | Package.swift | Vapor | Structs, Classes |
-| Dart | pubspec.yaml | - | Classes |
+| Language      | Deps                             | Endpoints                               | Models                     |
+| ------------- | -------------------------------- | --------------------------------------- | -------------------------- |
+| TypeScript/JS | package.json                     | Express, Fastify, Hono, NestJS, Next.js | Interfaces, Types, Classes |
+| Python        | requirements.txt, pyproject.toml | FastAPI, Flask, Django                  | Pydantic, Dataclasses      |
+| Rust          | Cargo.toml                       | Actix, Axum, Rocket                     | Structs, Enums             |
+| Go            | go.mod                           | Gin, Echo, Fiber                        | Structs                    |
+| Java/Kotlin   | pom.xml, build.gradle            | Spring                                  | Classes, Records           |
+| PHP           | composer.json                    | Laravel, Symfony                        | Classes                    |
+| Ruby          | Gemfile                          | Rails, Sinatra                          | ActiveRecord               |
+| C#/.NET       | .csproj                          | ASP.NET                                 | Classes, Records           |
+| Swift         | Package.swift                    | Vapor                                   | Structs, Classes           |
+| Dart          | pubspec.yaml                     | -                                       | Classes                    |
 
 ## Analysis Includes
 
 - **Tech Stack**: Languages, frameworks, dependencies, package manager
-- **Structure**: Folders with descriptions, entry points, config files
+- **Structure**: Folders with descriptions, entry points, config files, largest file per folder
 - **API Endpoints**: REST routes, GraphQL operations
 - **Data Models**: Interfaces, types, schemas, database models
 - **Architecture**: MVC, Clean Architecture, Serverless, etc.
 - **Status**: TODOs, tests, CI/CD, Docker
+- **Hot Files**: Oversized, high-import, TODO-dense files
+- **Import Graph**: Hub files, orphan files, dependency map
+- **Annotations**: Business rules, gotchas, warnings (managed via MCP)
 
 ## Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
+| Variable            | Description           | Default         |
+| ------------------- | --------------------- | --------------- |
 | `REPO_CONTEXT_ROOT` | Project root override | `process.cwd()` |
 
 ## Contributing
@@ -186,6 +264,12 @@ npm run build
 1. `src/detectors/language.ts` - Language detection
 2. `src/detectors/endpoints.ts` - Endpoint patterns
 3. `src/detectors/models.ts` - Model patterns
+
+### Adding Detectors
+
+4. `src/detectors/hotfiles.ts` - Hot file thresholds
+5. `src/detectors/imports.ts` - Import graph patterns
+6. `src/detectors/annotations.ts` - Annotation manager
 
 ## License
 
