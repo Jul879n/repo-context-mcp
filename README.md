@@ -2,13 +2,15 @@
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. **Better than CLAUDE.md** because it's dynamic, accurate, and uses minimal tokens.
 
-## What's New in v1.2.0
+## What's New in v1.3.0
 
+- **📝 Zero-Token Auto-Docs**: Auto-generates `.repo-context/` with 5 markdown files on startup
+- **👁️ File Watcher**: Detects code changes and regenerates docs automatically (5s debounce)
+- **0 MCP tokens per session**: AI reads `.repo-context/*.md` naturally — no tool calls needed
 - **🔥 Hot Files Detection**: Auto-detects oversized files, high imports, TODO-dense code
 - **🔗 Import Graph**: Internal dependency map with hub files, orphans, and **mermaid diagrams**
 - **📋 Annotations**: Manage business rules, gotchas, and warnings via MCP tools (CRUD)
-- **📁 Largest File per Folder**: Structure shows the biggest file in each directory
-- **13 Tools + 10 Resources**: Up from 7+7 in v1.1.0
+- **14 Tools + 10 Resources**: Up from 7+7 in v1.1.0
 
 ## Why Better Than CLAUDE.md?
 
@@ -78,11 +80,12 @@ get_project_endpoints
 get_project_models
 get_project_status
 
-# v1.2.0 — New intelligence tools
+# v1.3.0 — New intelligence tools
 get_project_hotfiles                              # Complex/oversized files
 get_project_imports                               # Dependency graph (text)
 get_project_imports { "format": "mermaid" }       # Dependency graph (visual)
 get_project_annotations                           # Business rules & gotchas
+generate_project_docs                             # Force regenerate .repo-context/
 
 # v1.2.0 — Annotation management
 add_annotation { "category": "businessRules", "text": "..." }
@@ -169,6 +172,22 @@ Orphans: legacy/parser.ts, utils/deprecated.ts
 
 Status: tests:25 | docker | ci:github | todos:3
 ```
+
+## Zero-Token Auto-Docs (v1.3.0)
+
+On startup, the MCP generates a `.repo-context/` directory with rich markdown docs:
+
+```
+your-project/
+├── .repo-context/
+│   ├── ARCHITECTURE.md     ← Stack, frameworks, deps, patterns
+│   ├── COMPONENTS.md       ← Folders, entry points, hot files, endpoints
+│   ├── MODELS.md           ← All data models with fields
+│   ├── IMPORTS.md          ← Hub files, orphans, mermaid diagram
+│   └── STATUS.md           ← TODOs, CI/CD, Docker, annotations
+```
+
+The AI reads these files naturally — **0 MCP token cost**. A file watcher keeps them updated automatically when you change code (5s debounce).
 
 ## Hot Files Detection (v1.2.0)
 

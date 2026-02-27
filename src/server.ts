@@ -11,8 +11,9 @@ import {
 	Resource,
 	Prompt,
 } from '@modelcontextprotocol/sdk/types.js';
-import {getFullContext, refreshContext} from './tools/index.js';
+import {getFullContext, refreshContext, generateDocs} from './tools/index.js';
 import {ProjectContext} from './types/index.js';
+import {startWatcher} from './watcher.js';
 import {
 	formatUltraCompact,
 	formatCompact,
@@ -190,6 +191,16 @@ This replaces the need to explore the codebase manually.`,
 		name: 'list_annotations',
 		description:
 			'Lists all project annotations with indices for easy management.',
+		inputSchema: {
+			type: 'object',
+			properties: {},
+			required: [],
+		},
+	},
+	{
+		name: 'generate_project_docs',
+		description:
+			'Regenerates .repo-context/ auto-docs. Usually automatic via file watcher, use only if needed.',
 		inputSchema: {
 			type: 'object',
 			properties: {},
@@ -508,7 +519,7 @@ export function createServer(): Server {
 	const server = new Server(
 		{
 			name: 'repo-context-mcp',
-			version: '1.2.0',
+			version: '1.3.0',
 		},
 		{
 			capabilities: {
@@ -1033,6 +1044,15 @@ export function createServer(): Server {
 					};
 				}
 
+				case 'generate_project_docs': {
+					await generateDocs(PROJECT_ROOT);
+					return {
+						content: [
+							{type: 'text', text: 'Auto-docs regenerated in .repo-context/'},
+						],
+					};
+				}
+
 				default:
 					return {
 						content: [{type: 'text', text: `Unknown: ${name}`}],
@@ -1058,15 +1078,19 @@ export async function main(): Promise<void> {
 
 	await server.connect(transport);
 
-	// AUTO-INJECT: Send context notification after connection
-	// This makes the context available immediately without tool calls
+	// AUTO-INJECT: Pre-load context and generate auto-docs
 	try {
 		const context = await getFullContext(PROJECT_ROOT);
-		const summary = formatUltraCompact(context);
 
 		// Log to stderr (visible to user, not consumed as tokens)
 		console.error(`\n[repo-context] Project loaded: ${context.name}`);
-		console.error(`[repo-context] ${formatMinimal(context)}\n`);
+		console.error(`[repo-context] Generating auto-docs...`);
+
+		// Generate .repo-context/*.md files
+		await generateDocs(PROJECT_ROOT);
+
+		// Start file watcher for auto-updates
+		startWatcher(PROJECT_ROOT);
 
 		// Notify resource change so clients know context is ready
 		server.notification({
