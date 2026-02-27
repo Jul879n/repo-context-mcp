@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "repo-context-mcp": "./bin/repo-context-mcp.js"
+    "repo-context-mcp": "bin/repo-context-mcp.js"
   },
   "scripts": {
     "build": "tsc",
