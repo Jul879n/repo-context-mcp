@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { ProjectContext } from '../types/index.js';
-import { CacheManager } from '../cache/manager.js';
+import { CacheManager, FastCache } from '../cache/manager.js';
 import {
   detectStack,
   detectEndpoints,
@@ -15,21 +15,32 @@ export async function getFullContext(
   projectRoot: string,
   forceRefresh = false
 ): Promise<ProjectContext> {
+  // 1. Check in-memory cache first (fastest)
+  if (!forceRefresh) {
+    const memoryCached = FastCache.get(projectRoot);
+    if (memoryCached) {
+      return memoryCached;
+    }
+  }
+  
   const cache = new CacheManager(projectRoot);
   
-  // Check cache first
+  // 2. Check disk cache
   if (!forceRefresh) {
     const cached = await cache.get();
     if (cached) {
+      // Store in memory for future fast access
+      FastCache.set(projectRoot, cached);
       return cached;
     }
   }
   
-  // Analyze project
+  // 3. Analyze project (only if cache miss)
   const context = await analyzeProject(projectRoot);
   
-  // Save to cache
+  // 4. Save to both caches
   await cache.set(context, projectRoot);
+  FastCache.set(projectRoot, context);
   
   return context;
 }
@@ -40,7 +51,7 @@ export async function analyzeProject(projectRoot: string): Promise<ProjectContex
   const description = await getProjectDescription(projectRoot);
   const version = await getProjectVersion(projectRoot);
   
-  // Run all detectors
+  // Run all detectors in parallel for speed
   const [stack, structure, architecture, status] = await Promise.all([
     detectStack(projectRoot),
     detectStructure(projectRoot),
@@ -48,7 +59,7 @@ export async function analyzeProject(projectRoot: string): Promise<ProjectContex
     detectStatus(projectRoot),
   ]);
   
-  // These depend on stack info
+  // These depend on stack info - run in parallel
   const frameworkNames = stack.frameworks.map(f => f.name);
   const [endpoints, models] = await Promise.all([
     detectEndpoints(projectRoot, stack.primaryLanguage, frameworkNames),
@@ -119,12 +130,11 @@ async function getProjectDescription(projectRoot: string): Promise<string | unde
     if (pkg.description) return pkg.description;
   } catch {}
   
-  // Try README
+  // Try README (first paragraph only)
   try {
     const readmePath = path.join(projectRoot, 'README.md');
     const content = await fs.readFile(readmePath, 'utf-8');
     
-    // Get first paragraph after title
     const lines = content.split('\n');
     let foundTitle = false;
     let description = '';
@@ -140,7 +150,8 @@ async function getProjectDescription(projectRoot: string): Promise<string | unde
       }
     }
     
-    if (description && description.length < 300) {
+    // Truncate long descriptions
+    if (description && description.length < 200) {
       return description;
     }
   } catch {}
@@ -171,5 +182,6 @@ async function getProjectVersion(projectRoot: string): Promise<string | undefine
 export async function refreshContext(projectRoot: string): Promise<ProjectContext> {
   const cache = new CacheManager(projectRoot);
   await cache.invalidate();
+  FastCache.clear(projectRoot);
   return getFullContext(projectRoot, true);
 }

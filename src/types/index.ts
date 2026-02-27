@@ -160,6 +160,8 @@ export interface CacheData {
   context: ProjectContext;
   generatedAt: string;
   projectRoot: string;
+  fileHash?: string;
+  ttl?: number;
 }
 
 // Analyzer interface

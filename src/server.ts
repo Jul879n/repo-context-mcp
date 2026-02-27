@@ -3,34 +3,48 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
   Tool,
+  Resource,
+  Prompt,
 } from '@modelcontextprotocol/sdk/types.js';
 import { getFullContext, refreshContext } from './tools/index.js';
 import { ProjectContext } from './types/index.js';
+import {
+  formatUltraCompact,
+  formatCompact,
+  formatMinimal,
+  formatJSON,
+} from './formatters/index.js';
 
 // Get project root from environment or current directory
 const PROJECT_ROOT = process.env.REPO_CONTEXT_ROOT || process.cwd();
 
-// Define available tools
+// Output format type
+type OutputFormat = 'ultra' | 'compact' | 'normal' | 'minimal' | 'json';
+
+// Define available tools - OPTIMIZED for minimal token usage
 const tools: Tool[] = [
   {
     name: 'get_project_context',
-    description: `Analyzes the current project and returns comprehensive context including:
-- Project name, description, and version
-- Tech stack (languages, frameworks, dependencies)
-- Folder structure with descriptions
-- API endpoints (REST, GraphQL, etc.)
-- Data models and schemas
-- Architecture patterns detected
-- Project status (TODOs, tests, CI/CD, Docker)
-
-Use this tool at the START of a conversation to understand the project structure and save tokens by avoiding redundant exploration.`,
+    description: `IMPORTANT: Call this tool FIRST at the START of every conversation to understand the project.
+Returns analyzed project context (stack, structure, endpoints, models).
+Format options: ultra (~50 tokens), compact (~150, default), normal (full).
+This replaces the need to explore the codebase manually.`,
     inputSchema: {
       type: 'object',
       properties: {
+        format: {
+          type: 'string',
+          enum: ['ultra', 'compact', 'normal', 'minimal', 'json'],
+          description: 'Output format (default: compact)',
+        },
         force_refresh: {
           type: 'boolean',
-          description: 'Force re-analysis even if cached context exists (default: false)',
+          description: 'Force re-analysis (default: false)',
         },
       },
       required: [],
@@ -38,7 +52,7 @@ Use this tool at the START of a conversation to understand the project structure
   },
   {
     name: 'refresh_project_context',
-    description: 'Invalidates the cached context and performs a fresh analysis of the project. Use this after making significant changes to the project structure.',
+    description: 'Re-analyzes project. Use after major changes.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -47,7 +61,7 @@ Use this tool at the START of a conversation to understand the project structure
   },
   {
     name: 'get_project_stack',
-    description: 'Returns only the tech stack information: languages, frameworks, dependencies, package manager, and runtime.',
+    description: 'Returns tech stack only: lang, frameworks, deps.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -56,7 +70,7 @@ Use this tool at the START of a conversation to understand the project structure
   },
   {
     name: 'get_project_structure',
-    description: 'Returns only the folder structure, entry points, and configuration files.',
+    description: 'Returns folder structure and entry points only.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -65,7 +79,7 @@ Use this tool at the START of a conversation to understand the project structure
   },
   {
     name: 'get_project_endpoints',
-    description: 'Returns only the detected API endpoints (REST routes, GraphQL operations, etc.).',
+    description: 'Returns API endpoints only.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -74,7 +88,7 @@ Use this tool at the START of a conversation to understand the project structure
   },
   {
     name: 'get_project_models',
-    description: 'Returns only the detected data models, schemas, types, and interfaces.',
+    description: 'Returns data models/schemas only.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -83,7 +97,7 @@ Use this tool at the START of a conversation to understand the project structure
   },
   {
     name: 'get_project_status',
-    description: 'Returns project status: TODOs found in code, test coverage info, CI/CD setup, Docker presence.',
+    description: 'Returns project status: tests, CI, Docker, TODOs.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -92,8 +106,96 @@ Use this tool at the START of a conversation to understand the project structure
   },
 ];
 
-// Format context for output
-function formatContext(context: ProjectContext): string {
+// Define MCP Prompts - These inject context WITHOUT tool calls!
+// The context becomes part of the system prompt = 0 extra tokens per message
+function getPrompts(): Prompt[] {
+  return [
+    {
+      name: 'project-context',
+      description: 'Injects project context into conversation. Use at start.',
+      arguments: [
+        {
+          name: 'format',
+          description: 'Output format: minimal, ultra, compact (default)',
+          required: false,
+        },
+      ],
+    },
+    {
+      name: 'project-summary',
+      description: 'Ultra-minimal project summary (~50 tokens)',
+    },
+  ];
+}
+
+// Define MCP Resources - These are FREE (no tool call tokens!)
+// Resources can be embedded directly into context without explicit tool calls
+function getResources(): Resource[] {
+  return [
+    {
+      uri: 'repo://context/summary',
+      name: 'Project Summary',
+      description: 'Ultra-compact project summary (~50 tokens). Embed this for instant context.',
+      mimeType: 'text/plain',
+    },
+    {
+      uri: 'repo://context/full',
+      name: 'Full Project Context',
+      description: 'Complete project analysis in compact format.',
+      mimeType: 'text/plain',
+    },
+    {
+      uri: 'repo://context/stack',
+      name: 'Tech Stack',
+      description: 'Languages, frameworks, and dependencies.',
+      mimeType: 'text/plain',
+    },
+    {
+      uri: 'repo://context/structure',
+      name: 'Project Structure',
+      description: 'Folder layout and entry points.',
+      mimeType: 'text/plain',
+    },
+    {
+      uri: 'repo://context/api',
+      name: 'API Endpoints',
+      description: 'REST/GraphQL endpoints if detected.',
+      mimeType: 'text/plain',
+    },
+    {
+      uri: 'repo://context/models',
+      name: 'Data Models',
+      description: 'Schemas, types, and interfaces.',
+      mimeType: 'text/plain',
+    },
+    {
+      uri: 'repo://context.json',
+      name: 'Project Context (JSON)',
+      description: 'Full context in JSON format for programmatic use.',
+      mimeType: 'application/json',
+    },
+  ];
+}
+
+// Format context based on output format
+function formatByType(context: ProjectContext, format: OutputFormat): string {
+  switch (format) {
+    case 'ultra':
+      return formatUltraCompact(context);
+    case 'compact':
+      return formatCompact(context);
+    case 'minimal':
+      return formatMinimal(context);
+    case 'json':
+      return formatJSON(context);
+    case 'normal':
+    default:
+      return formatContextNormal(context);
+  }
+}
+
+// Original "normal" format (kept for backwards compatibility)
+function formatContextNormal(context: ProjectContext): string {
   const sections: string[] = [];
   
   // Header
@@ -199,7 +301,7 @@ function formatContext(context: ProjectContext): string {
   if (context.status.todos.length > 0) {
     sections.push(`\n### Top TODOs`);
     for (const todo of context.status.todos.slice(0, 10)) {
-      const priority = todo.priority === 'high' ? '🔴' : todo.priority === 'medium' ? '🟡' : '⚪';
+      const priority = todo.priority === 'high' ? '!' : todo.priority === 'medium' ? '-' : '.';
       sections.push(`- ${priority} ${todo.text} (${todo.file}:${todo.line})`);
     }
   }
@@ -219,6 +321,8 @@ export function createServer(): Server {
     {
       capabilities: {
         tools: {},
+        resources: {},
+        prompts: {},
       },
     }
   );
@@ -226,6 +330,164 @@ export function createServer(): Server {
   // List available tools
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return { tools };
+  });
+  
+  // List available prompts
+  server.setRequestHandler(ListPromptsRequestSchema, async () => {
+    return { prompts: getPrompts() };
+  });
+  
+  // Get prompt content - This is the key for 0-token context injection!
+  server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    const { name, arguments: promptArgs } = request.params;
+    
+    try {
+      const context = await getFullContext(PROJECT_ROOT);
+      
+      if (name === 'project-context') {
+        const format = (promptArgs?.format as OutputFormat) || 'compact';
+        const content = formatByType(context, format);
+        
+        return {
+          messages: [
+            {
+              role: 'user',
+              content: {
+                type: 'text',
+                text: `Project context:\n${content}`,
+              },
+            },
+          ],
+        };
+      }
+      
+      if (name === 'project-summary') {
+        return {
+          messages: [
+            {
+              role: 'user',
+              content: {
+                type: 'text',
+                text: `Project: ${formatMinimal(context)}`,
+              },
+            },
+          ],
+        };
+      }
+      
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `Unknown prompt: ${name}`,
+            },
+          },
+        ],
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `Error: ${errorMessage}`,
+            },
+          },
+        ],
+      };
+    }
+  });
+  
+  // List available resources
+  server.setRequestHandler(ListResourcesRequestSchema, async () => {
+    return { resources: getResources() };
+  });
+  
+  // Read resource content
+  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const { uri } = request.params;
+    
+    try {
+      const context = await getFullContext(PROJECT_ROOT);
+      let content: string;
+      let mimeType = 'text/plain';
+      
+      switch (uri) {
+        case 'repo://context/summary':
+          content = formatMinimal(context);
+          break;
+        case 'repo://context/full':
+          content = formatCompact(context);
+          break;
+        case 'repo://context/stack':
+          content = [
+            `Stack: ${context.stack.primaryLanguage}`,
+            context.stack.frameworks.length > 0 
+              ? `Frameworks: ${context.stack.frameworks.map(f => f.name).join(', ')}`
+              : '',
+            `Deps: ${context.stack.dependencies.filter(d => !d.dev).slice(0, 10).map(d => d.name).join(', ')}`,
+          ].filter(Boolean).join('\n');
+          break;
+        case 'repo://context/structure':
+          content = [
+            `Entry: ${context.structure.entryPoints.join(', ')}`,
+            `Folders: ${context.structure.folders.map(f => f.path).join(', ')}`,
+            `Config: ${context.structure.configFiles.join(', ')}`,
+          ].join('\n');
+          break;
+        case 'repo://context/api':
+          if (context.endpoints && context.endpoints.endpoints.length > 0) {
+            content = context.endpoints.endpoints
+              .map(e => `${e.method} ${e.path} → ${e.file}:${e.line}`)
+              .join('\n');
+          } else {
+            content = 'No API endpoints detected';
+          }
+          break;
+        case 'repo://context/models':
+          if (context.models && context.models.models.length > 0) {
+            content = context.models.models
+              .map(m => `${m.name} (${m.type}): ${m.fields.map(f => f.name).join(', ')}`)
+              .join('\n');
+          } else {
+            content = 'No data models detected';
+          }
+          break;
+        case 'repo://context.json':
+          content = JSON.stringify(context, null, 2);
+          mimeType = 'application/json';
+          break;
+        default:
+          return {
+            contents: [{
+              uri,
+              mimeType: 'text/plain',
+              text: `Unknown resource: ${uri}`,
+            }],
+          };
+      }
+      
+      return {
+        contents: [{
+          uri,
+          mimeType,
+          text: content,
+        }],
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        contents: [{
+          uri,
+          mimeType: 'text/plain',
+          text: `Error: ${errorMessage}`,
+        }],
+      };
+    }
   });
   
   // Handle tool calls
@@ -237,13 +499,15 @@ export function createServer(): Server {
       
       switch (name) {
         case 'get_project_context': {
-          const forceRefresh = (args as { force_refresh?: boolean })?.force_refresh ?? false;
+          const typedArgs = args as { format?: OutputFormat; force_refresh?: boolean } | undefined;
+          const format = typedArgs?.format ?? 'compact';
+          const forceRefresh = typedArgs?.force_refresh ?? false;
           context = await getFullContext(PROJECT_ROOT, forceRefresh);
           return {
             content: [
               {
                 type: 'text',
-                text: formatContext(context),
+                text: formatByType(context, format),
               },
             ],
           };
@@ -255,7 +519,7 @@ export function createServer(): Server {
             content: [
               {
                 type: 'text',
-                text: `Project context refreshed successfully.\n\n${formatContext(context)}`,
+                text: `Refreshed.\n\n${formatCompact(context)}`,
               },
             ],
           };
@@ -264,14 +528,10 @@ export function createServer(): Server {
         case 'get_project_stack': {
           context = await getFullContext(PROJECT_ROOT);
           const stackInfo = [
-            `# Tech Stack for ${context.name}`,
-            `\n- **Primary Language:** ${context.stack.primaryLanguage}`,
-            `- **All Languages:** ${context.stack.languages.join(', ')}`,
-            context.stack.frameworks.length > 0 ? `- **Frameworks:** ${context.stack.frameworks.map(f => f.name).join(', ')}` : '',
-            context.stack.packageManager ? `- **Package Manager:** ${context.stack.packageManager}` : '',
-            context.stack.runtime ? `- **Runtime:** ${context.stack.runtime}` : '',
-            `\n## Dependencies (${context.stack.dependencies.length} total)`,
-            ...context.stack.dependencies.filter(d => !d.dev).slice(0, 20).map(d => `- ${d.name}: ${d.version}`),
+            `${context.name}|${context.stack.primaryLanguage}`,
+            context.stack.frameworks.length > 0 ? `fw:${context.stack.frameworks.map(f => f.name).join(',')}` : '',
+            context.stack.packageManager ? `pkg:${context.stack.packageManager}` : '',
+            `deps:${context.stack.dependencies.filter(d => !d.dev).slice(0, 10).map(d => d.name).join(',')}`,
           ].filter(Boolean).join('\n');
           
           return {
@@ -282,13 +542,9 @@ export function createServer(): Server {
         case 'get_project_structure': {
           context = await getFullContext(PROJECT_ROOT);
           const structureInfo = [
-            `# Project Structure for ${context.name}`,
-            `\n## Entry Points`,
-            ...context.structure.entryPoints.map(e => `- ${e}`),
-            `\n## Folders`,
-            ...context.structure.folders.map(f => `- **${f.path}/** - ${f.description} (${f.fileCount} files)`),
-            `\n## Config Files`,
-            context.structure.configFiles.join(', '),
+            `→${context.structure.entryPoints.join(',')}`,
+            context.structure.folders.map(f => `${f.path}:${f.fileCount}`).join(' '),
+            `cfg:${context.structure.configFiles.join(',')}`,
           ].join('\n');
           
           return {
@@ -300,16 +556,19 @@ export function createServer(): Server {
           context = await getFullContext(PROJECT_ROOT);
           if (!context.endpoints || context.endpoints.endpoints.length === 0) {
             return {
-              content: [{ type: 'text', text: 'No API endpoints detected in this project.' }],
+              content: [{ type: 'text', text: 'No API endpoints.' }],
             };
           }
           
           const endpointsInfo = [
-            `# API Endpoints (${context.endpoints.type.toUpperCase()})`,
-            `\nTotal: ${context.endpoints.endpoints.length} endpoints`,
-            '',
-            ...context.endpoints.endpoints.map(ep => `- \`${ep.method} ${ep.path}\` → ${ep.file}:${ep.line}`),
-          ].join('\n');
+            `API(${context.endpoints.type}):${context.endpoints.endpoints.length}`,
+            ...context.endpoints.endpoints.slice(0, 20).map(ep => 
+              `${ep.method[0]}:${ep.path}→${ep.file}:${ep.line}`
+            ),
+            context.endpoints.endpoints.length > 20 
+              ? `+${context.endpoints.endpoints.length - 20} more`
+              : '',
+          ].filter(Boolean).join('\n');
           
           return {
             content: [{ type: 'text', text: endpointsInfo }],
@@ -320,20 +579,16 @@ export function createServer(): Server {
           context = await getFullContext(PROJECT_ROOT);
           if (!context.models || context.models.models.length === 0) {
             return {
-              content: [{ type: 'text', text: 'No data models detected in this project.' }],
+              content: [{ type: 'text', text: 'No models.' }],
             };
           }
           
           const modelsInfo = [
-            `# Data Models`,
-            context.models.ormUsed ? `\nORM: ${context.models.ormUsed}` : '',
-            `\nTotal: ${context.models.models.length} models`,
-            '',
-            ...context.models.models.map(m => {
-              const fields = m.fields.map(f => `${f.name}: ${f.type}`).join(', ');
-              return `## ${m.name} (${m.type})\nFile: ${m.file}:${m.line}\nFields: ${fields || 'none detected'}`;
-            }),
-          ].filter(Boolean).join('\n');
+            `Models:${context.models.models.length}${context.models.ormUsed ? '|' + context.models.ormUsed : ''}`,
+            ...context.models.models.slice(0, 15).map(m => 
+              `${m.name}(${m.type}):${m.fields.slice(0, 4).map(f => f.name).join(',')}${m.fields.length > 4 ? '...' : ''}`
+            ),
+          ].join('\n');
           
           return {
             content: [{ type: 'text', text: modelsInfo }],
@@ -343,18 +598,13 @@ export function createServer(): Server {
         case 'get_project_status': {
           context = await getFullContext(PROJECT_ROOT);
           const statusInfo = [
-            `# Project Status for ${context.name}`,
-            `\n## Overview`,
-            `- **Documentation:** ${context.status.hasDocumentation ? 'Yes' : 'No'}`,
-            `- **Docker:** ${context.status.hasDocker ? 'Yes' : 'No'}`,
-            `- **CI/CD:** ${context.status.hasCI ? `Yes (${context.status.ciPlatform})` : 'No'}`,
-            `- **Tests:** ${context.status.tests.testFiles} test files${context.status.tests.framework ? ` (${context.status.tests.framework})` : ''}`,
-            `\n## TODOs (${context.status.todos.length} found)`,
-            ...context.status.todos.map(t => {
-              const priority = t.priority === 'high' ? '🔴 HIGH' : t.priority === 'medium' ? '🟡 MEDIUM' : '⚪ LOW';
-              return `- [${priority}] ${t.text}\n  ${t.file}:${t.line}`;
-            }),
-          ].join('\n');
+            `${context.name}`,
+            `test:${context.status.tests.testFiles}${context.status.tests.framework ? '(' + context.status.tests.framework + ')' : ''}`,
+            context.status.hasDocker ? 'docker:yes' : '',
+            context.status.hasCI ? `ci:${context.status.ciPlatform}` : '',
+            context.status.hasDocumentation ? 'docs:yes' : '',
+            context.status.todos.length > 0 ? `todos:${context.status.todos.length}` : '',
+          ].filter(Boolean).join('|');
           
           return {
             content: [{ type: 'text', text: statusInfo }],
@@ -363,7 +613,7 @@ export function createServer(): Server {
         
         default:
           return {
-            content: [{ type: 'text', text: `Unknown tool: ${name}` }],
+            content: [{ type: 'text', text: `Unknown: ${name}` }],
             isError: true,
           };
       }
@@ -385,6 +635,24 @@ export async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   
   await server.connect(transport);
+  
+  // AUTO-INJECT: Send context notification after connection
+  // This makes the context available immediately without tool calls
+  try {
+    const context = await getFullContext(PROJECT_ROOT);
+    const summary = formatUltraCompact(context);
+    
+    // Log to stderr (visible to user, not consumed as tokens)
+    console.error(`\n[repo-context] Project loaded: ${context.name}`);
+    console.error(`[repo-context] ${formatMinimal(context)}\n`);
+    
+    // Notify resource change so clients know context is ready
+    server.notification({
+      method: 'notifications/resources/list_changed',
+    });
+  } catch (error) {
+    console.error('[repo-context] Warning: Could not pre-load context:', error);
+  }
   
   // Handle graceful shutdown
   process.on('SIGINT', async () => {
