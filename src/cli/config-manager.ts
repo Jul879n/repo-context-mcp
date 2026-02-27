@@ -195,6 +195,21 @@ export const TARGETS: TargetConfig[] = [
 			args: ['repo-context-mcp'],
 		},
 	},
+	{
+		id: 'antigravity',
+		name: 'Antigravity (Google)',
+		configKey: 'mcpServers',
+		format: 'json',
+		getPath: (platform) => {
+			if (platform === 'win32')
+				return joinHome('.gemini', 'antigravity', 'mcp_config.json');
+			return joinHome('.gemini', 'antigravity', 'mcp_config.json');
+		},
+		serverEntry: {
+			command: 'npx',
+			args: ['repo-context-mcp'],
+		},
+	},
 ];
 
 // ─── Detection & Status ───────────────────────────────────────────────

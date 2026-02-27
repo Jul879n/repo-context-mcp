@@ -5,7 +5,7 @@ Universal MCP server that analyzes any codebase and provides structured context 
 ## What's New in v1.4.0
 
 - **🧙 Interactive Setup Wizard**: `repo-context-setup` auto-configures your IDEs/AIs
-- **8 IDEs supported**: Claude Desktop, Cursor, Windsurf, VS Code, Cline, Zed, OpenCode, Codex
+- **9 IDEs supported**: Claude Desktop, Cursor, Windsurf, VS Code, Cline, Zed, OpenCode, Codex, Antigravity
 - **Auto-detection**: Wizard detects which tools you have installed
 - **Safe merge**: Never overwrites existing MCP servers in your config
 - **Update anytime**: Run the wizard again to add/remove configurations
@@ -33,7 +33,7 @@ repo-context-setup
 
 The wizard will:
 
-1. Detect installed AI tools (Claude Desktop, Cursor, Windsurf, VS Code, Cline, Zed, OpenCode, Codex)
+1. Detect installed AI tools (Claude Desktop, Cursor, Windsurf, VS Code, Cline, Zed, OpenCode, Codex, Antigravity)
 2. Let you select which ones to configure
 3. Safely merge `repo-context` into their config files (backup created)
 4. Show a summary of changes

@@ -335,7 +335,7 @@ Options:
   --auto         Show quick setup info (used by postinstall)
 
 Interactive wizard to configure repo-context-mcp in your IDEs and AI tools.
-Supports: Claude Desktop, Cursor, Windsurf, VS Code, Cline, Zed, OpenCode, Codex
+Supports: Claude Desktop, Cursor, Windsurf, VS Code, Cline, Zed, OpenCode, Codex, Antigravity
 `);
 		return;
 	}
