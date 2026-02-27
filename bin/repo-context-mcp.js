@@ -1,3 +1,7 @@
 #!/usr/bin/env node
 
-import('../dist/index.js');
+if (process.argv.includes('--setup')) {
+	import('../dist/cli/setup.js');
+} else {
+	import('../dist/index.js');
+}

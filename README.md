@@ -2,6 +2,14 @@
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. **Better than CLAUDE.md** because it's dynamic, accurate, and uses minimal tokens.
 
+## What's New in v1.4.0
+
+- **🧙 Interactive Setup Wizard**: `repo-context-setup` auto-configures your IDEs/AIs
+- **8 IDEs supported**: Claude Desktop, Cursor, Windsurf, VS Code, Cline, Zed, OpenCode, Codex
+- **Auto-detection**: Wizard detects which tools you have installed
+- **Safe merge**: Never overwrites existing MCP servers in your config
+- **Update anytime**: Run the wizard again to add/remove configurations
+
 ## What's New in v1.3.0
 
 - **📝 Zero-Token Auto-Docs**: Auto-generates `.repo-context/` with 5 markdown files on startup
@@ -12,41 +20,35 @@ Universal MCP server that analyzes any codebase and provides structured context 
 - **📋 Annotations**: Manage business rules, gotchas, and warnings via MCP tools (CRUD)
 - **14 Tools + 10 Resources**: Up from 7+7 in v1.1.0
 
-## Why Better Than CLAUDE.md?
+## Quick Setup
 
-| Feature                 | CLAUDE.md       | repo-context-mcp       |
-| ----------------------- | --------------- | ---------------------- |
-| Auto-generated          | No (manual)     | Yes                    |
-| Always accurate         | No (gets stale) | Yes                    |
-| Token usage             | ~500-2000       | **~50-350**            |
-| Detects endpoints       | No              | Yes                    |
-| Detects models          | No              | Yes                    |
-| Detects complex files   | No              | **Yes (hot files)**    |
-| Import dependency graph | No              | **Yes + mermaid**      |
-| Business rules/gotchas  | Manual only     | **CRUD via MCP tools** |
-| Updates with code       | No              | Yes (auto-cache)       |
-| MCP Resources           | N/A             | Yes (0 extra tokens)   |
-
-## Token Efficiency
-
-```
-Format        Tokens    Use Case
-─────────────────────────────────────────
-minimal       ~50       Quick context awareness
-ultra         ~165      Conversation start
-compact       ~350      Full understanding (default)
-normal        ~800      Detailed exploration
-```
-
-## Installation
+### Automatic (recommended)
 
 ```bash
 npm install -g repo-context-mcp
+
+# Run the interactive setup wizard
+repo-context-setup
 ```
 
-## Quick Setup
+The wizard will:
 
-### OpenCode / Claude Desktop / Cursor / Cline
+1. Detect installed AI tools (Claude Desktop, Cursor, Windsurf, VS Code, Cline, Zed, OpenCode, Codex)
+2. Let you select which ones to configure
+3. Safely merge `repo-context` into their config files (backup created)
+4. Show a summary of changes
+
+```bash
+# Alternative: use the --setup flag
+repo-context-mcp --setup
+
+# Check current config status (non-interactive)
+repo-context-setup --status
+```
+
+### Manual Setup
+
+Add to your IDE's MCP config file:
 
 ```json
 {
