@@ -2,63 +2,438 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import {FileSymbol} from '../types/index.js';
 
-// ─── SYMBOL PATTERNS ───
-// Regex patterns per language to extract symbols (functions, classes, interfaces, etc.)
+// ─── LINE-BY-LINE SYMBOL EXTRACTOR ───
+// Instead of multi-line regex, we scan each line for symbol definitions.
+// This handles indented code, arrow functions, export default, etc.
 
-interface SymbolPattern {
-	pattern: RegExp;
-	type: FileSymbol['type'];
+const SKIP_NAMES = new Set([
+	'if',
+	'for',
+	'while',
+	'switch',
+	'catch',
+	'return',
+	'new',
+	'throw',
+	'import',
+	'from',
+	'require',
+	'else',
+	'try',
+	'finally',
+	'do',
+	'await',
+	'typeof',
+	'instanceof',
+	'void',
+	'delete',
+	'in',
+	'of',
+	'case',
+	'break',
+	'continue',
+	'with',
+	'yield',
+	'super',
+	'this',
+	'true',
+	'false',
+	'null',
+	'undefined',
+	'let',
+	'var',
+	'const',
+	'function',
+	'class',
+	'extends',
+]);
+
+/**
+ * Extract symbols from a TS/JS/TSX/JSX file, line by line.
+ */
+function extractTsJsSymbols(lines: string[]): FileSymbol[] {
+	const symbols: FileSymbol[] = [];
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		const trimmed = line.trim();
+		if (
+			!trimmed ||
+			trimmed.startsWith('//') ||
+			trimmed.startsWith('*') ||
+			trimmed.startsWith('/*')
+		)
+			continue;
+
+		const isExported = trimmed.startsWith('export');
+		let sym: {name: string; type: FileSymbol['type']} | null = null;
+
+		// 1. export default function Name(
+		let m = trimmed.match(/^export\s+default\s+function\s+(\w+)/);
+		if (m) {
+			sym = {name: m[1], type: 'function'};
+		}
+
+		// 2. export function / async function / function (any indent)
+		if (!sym) {
+			m = trimmed.match(/^(?:export\s+)?(?:async\s+)?function\s+(\w+)/);
+			if (m && !SKIP_NAMES.has(m[1])) {
+				sym = {name: m[1], type: 'function'};
+			}
+		}
+
+		// 3. export default class / export class / class
+		if (!sym) {
+			m = trimmed.match(
+				/^(?:export\s+(?:default\s+)?)?(?:abstract\s+)?class\s+(\w+)/
+			);
+			if (m) {
+				sym = {name: m[1], type: 'class'};
+			}
+		}
+
+		// 4. interface
+		if (!sym) {
+			m = trimmed.match(/^(?:export\s+)?interface\s+(\w+)/);
+			if (m) {
+				sym = {name: m[1], type: 'interface'};
+			}
+		}
+
+		// 5. type alias
+		if (!sym) {
+			m = trimmed.match(/^(?:export\s+)?type\s+(\w+)\s*[=<]/);
+			if (m && !SKIP_NAMES.has(m[1])) {
+				sym = {name: m[1], type: 'type'};
+			}
+		}
+
+		// 6. enum
+		if (!sym) {
+			m = trimmed.match(/^(?:export\s+)?enum\s+(\w+)/);
+			if (m) {
+				sym = {name: m[1], type: 'enum'};
+			}
+		}
+
+		// 7. Arrow function: const/let/var name = (...) => { or = async (...) => {
+		//    Also catches: const name = useCallback( / useMemo(
+		if (!sym) {
+			m = trimmed.match(
+				/^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*(?::\s*[^=]+)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[a-zA-Z_]\w*)\s*(?::\s*[^=]+)?\s*=>/
+			);
+			if (m && !SKIP_NAMES.has(m[1])) {
+				sym = {name: m[1], type: 'function'};
+			}
+		}
+
+		// 8. Arrow function assigned with useCallback/useMemo: const name = useCallback((...) => {
+		if (!sym) {
+			m = trimmed.match(
+				/^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*(?::\s*[^=]+)?\s*=\s*(?:useCallback|useMemo|useRef|React\.memo)\s*\(/
+			);
+			if (m && !SKIP_NAMES.has(m[1])) {
+				sym = {name: m[1], type: 'function'};
+			}
+		}
+
+		// 9. General const/let with arrow or function expression (fallback):
+		//    const name = (...) => or const name = function(
+		if (!sym) {
+			m = trimmed.match(
+				/^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*(?::\s*[^=]+)?\s*=\s*(?:async\s+)?(?:function|\()/
+			);
+			if (m && !SKIP_NAMES.has(m[1])) {
+				sym = {name: m[1], type: 'function'};
+			}
+		}
+
+		// 10. export default (no named function — just skip, not useful)
+
+		if (sym) {
+			const endLine = findBlockEnd(lines, i, '.ts');
+			let signature = trimmed;
+			if (signature.length > 120) signature = signature.substring(0, 117) + '...';
+
+			symbols.push({
+				name: sym.name,
+				type: sym.type,
+				startLine: i + 1,
+				endLine,
+				signature,
+				exported: isExported,
+			});
+		}
+	}
+
+	return symbols;
 }
 
-const TS_JS_PATTERNS: SymbolPattern[] = [
-	// export interface Name { / interface Name {
-	{pattern: /^(export\s+)?interface\s+(\w+)/gm, type: 'interface'},
-	// export type Name = / type Name =
-	{pattern: /^(export\s+)?type\s+(\w+)\s*[=<]/gm, type: 'type'},
-	// export enum Name { / enum Name {
-	{pattern: /^(export\s+)?enum\s+(\w+)/gm, type: 'enum'},
-	// export class Name / class Name
-	{pattern: /^(export\s+)?(abstract\s+)?class\s+(\w+)/gm, type: 'class'},
-	// export function name( / function name( / export async function name(
-	{
-		pattern: /^(export\s+)?(async\s+)?function\s+(\w+)\s*[\(<]/gm,
-		type: 'function',
-	},
-	// export const name = / const name =
-	{
-		pattern: /^(export\s+)?const\s+(\w+)\s*[=:]/gm,
-		type: 'const',
-	},
-	// Method inside class: name(, async name(, public name(, private name(
-	{
-		pattern:
-			/^\s+(public|private|protected|static|async|readonly|\s)*(\w+)\s*\([^)]*\)\s*[:{]/gm,
-		type: 'method',
-	},
-];
+/**
+ * Extract symbols from Python files.
+ */
+function extractPythonSymbols(lines: string[]): FileSymbol[] {
+	const symbols: FileSymbol[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		const trimmed = lines[i].trim();
+		const indent = lines[i].match(/^\s*/)?.[0].length || 0;
+		let m: RegExpMatchArray | null;
 
-const PYTHON_PATTERNS: SymbolPattern[] = [
-	{pattern: /^class\s+(\w+)/gm, type: 'class'},
-	{pattern: /^def\s+(\w+)/gm, type: 'function'},
-	{pattern: /^\s+def\s+(\w+)/gm, type: 'method'},
-];
+		m = trimmed.match(/^class\s+(\w+)/);
+		if (m) {
+			symbols.push({
+				name: m[1],
+				type: 'class',
+				startLine: i + 1,
+				endLine: findBlockEnd(lines, i, '.py'),
+				signature: trimmed,
+				exported: true,
+			});
+			continue;
+		}
+		m = trimmed.match(/^(?:async\s+)?def\s+(\w+)/);
+		if (m) {
+			const type: FileSymbol['type'] = indent > 0 ? 'method' : 'function';
+			symbols.push({
+				name: m[1],
+				type,
+				startLine: i + 1,
+				endLine: findBlockEnd(lines, i, '.py'),
+				signature: trimmed,
+				exported: indent === 0,
+			});
+		}
+	}
+	return symbols;
+}
 
-const GO_PATTERNS: SymbolPattern[] = [
-	{pattern: /^type\s+(\w+)\s+struct/gm, type: 'class'},
-	{pattern: /^type\s+(\w+)\s+interface/gm, type: 'interface'},
-	{pattern: /^func\s+(\w+)/gm, type: 'function'},
-	{pattern: /^func\s+\([^)]+\)\s+(\w+)/gm, type: 'method'},
-];
+/**
+ * Extract symbols from Go files.
+ */
+function extractGoSymbols(lines: string[]): FileSymbol[] {
+	const symbols: FileSymbol[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		const trimmed = lines[i].trim();
+		let m: RegExpMatchArray | null;
 
-const RUST_PATTERNS: SymbolPattern[] = [
-	{pattern: /^(pub\s+)?struct\s+(\w+)/gm, type: 'class'},
-	{pattern: /^(pub\s+)?enum\s+(\w+)/gm, type: 'enum'},
-	{pattern: /^(pub\s+)?trait\s+(\w+)/gm, type: 'interface'},
-	{pattern: /^(pub\s+)?(async\s+)?fn\s+(\w+)/gm, type: 'function'},
-	{pattern: /^\s+(pub\s+)?(async\s+)?fn\s+(\w+)/gm, type: 'method'},
-];
+		m = trimmed.match(/^type\s+(\w+)\s+struct/);
+		if (m) {
+			symbols.push({
+				name: m[1],
+				type: 'class',
+				startLine: i + 1,
+				endLine: findBlockEnd(lines, i, '.go'),
+				signature: trimmed,
+				exported: m[1][0] === m[1][0].toUpperCase(),
+			});
+			continue;
+		}
 
-function getPatternsForFile(filePath: string): SymbolPattern[] {
+		m = trimmed.match(/^type\s+(\w+)\s+interface/);
+		if (m) {
+			symbols.push({
+				name: m[1],
+				type: 'interface',
+				startLine: i + 1,
+				endLine: findBlockEnd(lines, i, '.go'),
+				signature: trimmed,
+				exported: m[1][0] === m[1][0].toUpperCase(),
+			});
+			continue;
+		}
+
+		m = trimmed.match(/^func\s+\([^)]+\)\s+(\w+)/);
+		if (m) {
+			symbols.push({
+				name: m[1],
+				type: 'method',
+				startLine: i + 1,
+				endLine: findBlockEnd(lines, i, '.go'),
+				signature: trimmed,
+				exported: m[1][0] === m[1][0].toUpperCase(),
+			});
+			continue;
+		}
+
+		m = trimmed.match(/^func\s+(\w+)/);
+		if (m) {
+			symbols.push({
+				name: m[1],
+				type: 'function',
+				startLine: i + 1,
+				endLine: findBlockEnd(lines, i, '.go'),
+				signature: trimmed,
+				exported: m[1][0] === m[1][0].toUpperCase(),
+			});
+		}
+	}
+	return symbols;
+}
+
+/**
+ * Extract symbols from Rust files.
+ */
+function extractRustSymbols(lines: string[]): FileSymbol[] {
+	const symbols: FileSymbol[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		const trimmed = lines[i].trim();
+		let m: RegExpMatchArray | null;
+		const isPub = trimmed.startsWith('pub');
+
+		m = trimmed.match(/^(?:pub\s+)?struct\s+(\w+)/);
+		if (m) {
+			symbols.push({
+				name: m[1],
+				type: 'class',
+				startLine: i + 1,
+				endLine: findBlockEnd(lines, i, '.rs'),
+				signature: trimmed,
+				exported: isPub,
+			});
+			continue;
+		}
+
+		m = trimmed.match(/^(?:pub\s+)?enum\s+(\w+)/);
+		if (m) {
+			symbols.push({
+				name: m[1],
+				type: 'enum',
+				startLine: i + 1,
+				endLine: findBlockEnd(lines, i, '.rs'),
+				signature: trimmed,
+				exported: isPub,
+			});
+			continue;
+		}
+
+		m = trimmed.match(/^(?:pub\s+)?trait\s+(\w+)/);
+		if (m) {
+			symbols.push({
+				name: m[1],
+				type: 'interface',
+				startLine: i + 1,
+				endLine: findBlockEnd(lines, i, '.rs'),
+				signature: trimmed,
+				exported: isPub,
+			});
+			continue;
+		}
+
+		m = trimmed.match(/^(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/);
+		if (m) {
+			const indent = lines[i].match(/^\s*/)?.[0].length || 0;
+			const type: FileSymbol['type'] = indent > 0 ? 'method' : 'function';
+			symbols.push({
+				name: m[1],
+				type,
+				startLine: i + 1,
+				endLine: findBlockEnd(lines, i, '.rs'),
+				signature: trimmed,
+				exported: isPub,
+			});
+		}
+	}
+	return symbols;
+}
+
+/**
+ * Extract symbols from Java/Kotlin/C#/PHP/Ruby/Swift/Dart (generic patterns).
+ */
+function extractGenericSymbols(lines: string[], ext: string): FileSymbol[] {
+	const symbols: FileSymbol[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		const trimmed = lines[i].trim();
+		let m: RegExpMatchArray | null;
+		const isPublic = /^(?:public|export|open)\s/.test(trimmed);
+
+		// Class
+		m = trimmed.match(
+			/^(?:(?:public|private|protected|internal|abstract|final|open|sealed|data|export)\s+)*class\s+(\w+)/
+		);
+		if (m) {
+			symbols.push({
+				name: m[1],
+				type: 'class',
+				startLine: i + 1,
+				endLine: findBlockEnd(lines, i, ext),
+				signature: trimmed.substring(0, 120),
+				exported: isPublic,
+			});
+			continue;
+		}
+
+		// Interface / protocol / trait
+		m = trimmed.match(
+			/^(?:(?:public|private|protected|internal|export)\s+)?(?:interface|protocol|trait)\s+(\w+)/
+		);
+		if (m) {
+			symbols.push({
+				name: m[1],
+				type: 'interface',
+				startLine: i + 1,
+				endLine: findBlockEnd(lines, i, ext),
+				signature: trimmed.substring(0, 120),
+				exported: isPublic,
+			});
+			continue;
+		}
+
+		// Enum
+		m = trimmed.match(
+			/^(?:(?:public|private|protected|internal|export)\s+)?enum\s+(\w+)/
+		);
+		if (m) {
+			symbols.push({
+				name: m[1],
+				type: 'enum',
+				startLine: i + 1,
+				endLine: findBlockEnd(lines, i, ext),
+				signature: trimmed.substring(0, 120),
+				exported: isPublic,
+			});
+			continue;
+		}
+
+		// Function/method (Java/Kotlin/C#/Swift/Dart)
+		m = trimmed.match(
+			/^(?:(?:public|private|protected|internal|static|final|override|abstract|async|suspend|open)\s+)*(?:fun|func|def|function|void|int|string|bool|double|float|var|val|let|Task|async)\s+(\w+)\s*[\(<]/
+		);
+		if (m && !SKIP_NAMES.has(m[1])) {
+			const indent = lines[i].match(/^\s*/)?.[0].length || 0;
+			const type: FileSymbol['type'] = indent > 4 ? 'method' : 'function';
+			symbols.push({
+				name: m[1],
+				type,
+				startLine: i + 1,
+				endLine: findBlockEnd(lines, i, ext),
+				signature: trimmed.substring(0, 120),
+				exported: isPublic,
+			});
+		}
+
+		// Ruby def
+		if (ext === '.rb') {
+			m = trimmed.match(/^(?:def)\s+(\w+)/);
+			if (m) {
+				const indent = lines[i].match(/^\s*/)?.[0].length || 0;
+				symbols.push({
+					name: m[1],
+					type: indent > 0 ? 'method' : 'function',
+					startLine: i + 1,
+					endLine: findBlockEnd(lines, i, ext),
+					signature: trimmed,
+					exported: true,
+				});
+			}
+		}
+	}
+	return symbols;
+}
+
+function extractSymbolsForFile(
+	lines: string[],
+	filePath: string
+): FileSymbol[] {
 	const ext = path.extname(filePath).toLowerCase();
 	switch (ext) {
 		case '.ts':
@@ -67,22 +442,29 @@ function getPatternsForFile(filePath: string): SymbolPattern[] {
 		case '.jsx':
 		case '.mjs':
 		case '.cjs':
-			return TS_JS_PATTERNS;
+			return extractTsJsSymbols(lines);
 		case '.py':
-			return PYTHON_PATTERNS;
+			return extractPythonSymbols(lines);
 		case '.go':
-			return GO_PATTERNS;
+			return extractGoSymbols(lines);
 		case '.rs':
-			return RUST_PATTERNS;
+			return extractRustSymbols(lines);
+		case '.java':
+		case '.kt':
+		case '.cs':
+		case '.php':
+		case '.rb':
+		case '.swift':
+		case '.dart':
+			return extractGenericSymbols(lines, ext);
 		default:
-			return TS_JS_PATTERNS; // fallback
+			return extractTsJsSymbols(lines); // fallback
 	}
 }
 
 // ─── RESOLVE FILE PATH ───
 
 function resolveFilePath(projectRoot: string, filePath: string): string {
-	// If already absolute and within project, use as-is
 	if (path.isAbsolute(filePath)) {
 		if (filePath.startsWith(projectRoot)) return filePath;
 		throw new Error(`File path outside project root: ${filePath}`);
@@ -104,68 +486,12 @@ export async function getFileOutline(
 	const content = await fs.readFile(fullPath, 'utf-8');
 	const lines = content.split('\n');
 	const totalLines = lines.length;
-	const patterns = getPatternsForFile(filePath);
-	const symbols: FileSymbol[] = [];
 
-	// Find all symbol starts
-	for (const {pattern, type} of patterns) {
-		pattern.lastIndex = 0;
-		let match;
-		while ((match = pattern.exec(content)) !== null) {
-			const lineIndex = content.substring(0, match.index).split('\n').length - 1;
-			const startLine = lineIndex + 1;
-			const line = lines[lineIndex];
-
-			// Extract name: last capture group is the name
-			const groups = match.filter((g, i) => i > 0 && g && /^\w+$/.test(g));
-			const name = groups[groups.length - 1] || match[0].trim();
-
-			// Skip common false positives
-			if (
-				[
-					'if',
-					'for',
-					'while',
-					'switch',
-					'catch',
-					'return',
-					'new',
-					'throw',
-					'import',
-					'from',
-					'require',
-				].includes(name)
-			) {
-				continue;
-			}
-
-			// Determine if exported
-			const exported = line.trimStart().startsWith('export');
-
-			// Find end line by counting braces/indentation
-			const endLine = findBlockEnd(lines, lineIndex, filePath);
-
-			// Build signature from the first line(s)
-			let signature = line.trim();
-			// Trim to a reasonable length
-			if (signature.length > 120) {
-				signature = signature.substring(0, 117) + '...';
-			}
-
-			symbols.push({
-				name,
-				type,
-				startLine,
-				endLine,
-				signature,
-				exported,
-			});
-		}
-	}
+	const rawSymbols = extractSymbolsForFile(lines, filePath);
 
 	// Deduplicate: keep the one with the larger range if same name+startLine
 	const seen = new Map<string, FileSymbol>();
-	for (const sym of symbols) {
+	for (const sym of rawSymbols) {
 		const key = `${sym.name}:${sym.startLine}`;
 		const existing = seen.get(key);
 		if (
@@ -176,19 +502,17 @@ export async function getFileOutline(
 		}
 	}
 
-	const uniqueSymbols = [...seen.values()].sort(
-		(a, b) => a.startLine - b.startLine
-	);
+	const symbols = [...seen.values()].sort((a, b) => a.startLine - b.startLine);
 
 	// Format compactly
-	const formatted = uniqueSymbols
+	const formatted = symbols
 		.map((s) => {
 			const exp = s.exported ? '⬆' : ' ';
 			return `${exp}${s.type}:${s.name} L${s.startLine}-${s.endLine}`;
 		})
 		.join('\n');
 
-	return {symbols: uniqueSymbols, totalLines, formatted};
+	return {symbols, totalLines, formatted};
 }
 
 // ─── READ FILE LINES ───
