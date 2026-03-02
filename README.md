@@ -2,33 +2,33 @@
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. **Better than CLAUDE.md** because it's dynamic, accurate, and uses minimal tokens.
 
+## What's New in v1.5.2
+
+- **🔍 `search_in_project`**: Cross-file search replacing native grep — respects `.gitignore`
+- **📁 `list_files`**: Project file listing replacing native `list_dir` — with sizes & glob filter
+- **📄 `read_file`**: Smart reader — full content for <200L files, auto-outline for large files
+- **⚡ Token optimized**: 21→10 tools exposed (~900 fewer tokens per API message)
+- **🧠 Fuzzy matching**: `read_file_symbol` finds symbols by partial name or typo
+- **🔎 `search_in_file`**: No more 10-match limit (now 50), compact output (-43% tokens)
+- **📦 `annotate`**: Unified add/remove/list annotations in one tool
+- **🎯 `get_project_context`**: New `section` param for specific info (stack, endpoints, etc.)
+
 ## What's New in v1.5.0
 
-- **📖 Smart File Reader**: 4 new tools for precise, token-efficient file reading
-- **`read_file_outline`**: See all functions/classes/interfaces with line ranges (~100 tokens)
-- **`read_file_lines`**: Read only specific line ranges (max 200 lines)
-- **`read_file_symbol`**: Read a specific function/class by name
-- **`search_in_file`**: Search with ±N lines of context
+- **📖 Smart File Reader**: 4 tools for precise, token-efficient file reading
 - **📋 OUTLINES.md**: Auto-generated outlines for all source files (0 tokens)
 - **🎯 Antigravity optimized**: `file-reader-guide` prompt, dynamic outline resources
-- **18 Tools + 11 Resources + 3 Prompts**
 
 ## What's New in v1.4.0
 
 - **🧙 Interactive Setup Wizard**: `repo-context-setup` auto-configures your IDEs/AIs
 - **9 IDEs supported**: Claude Desktop, Cursor, Windsurf, VS Code, Cline, Zed, OpenCode, Codex, Antigravity
-- **Auto-detection**: Wizard detects which tools you have installed
-- **Safe merge**: Never overwrites existing MCP servers in your config
-- **Update anytime**: Run the wizard again to add/remove configurations
 
 ## What's New in v1.3.0
 
-- **📝 Zero-Token Auto-Docs**: Auto-generates `.repo-context/` with 6 markdown files on startup
-- **👁️ File Watcher**: Detects code changes and regenerates docs automatically (5s debounce)
-- **0 MCP tokens per session**: AI reads `.repo-context/*.md` naturally — no tool calls needed
-- **🔥 Hot Files Detection**: Auto-detects oversized files, high imports, TODO-dense code
-- **🔗 Import Graph**: Internal dependency map with hub files, orphans, and **mermaid diagrams**
-- **📋 Annotations**: Manage business rules, gotchas, and warnings via MCP tools (CRUD)
+- **📝 Zero-Token Auto-Docs**: Auto-generates `.repo-context/` on startup
+- **👁️ File Watcher**: Auto-regenerates docs on code changes
+- **🔥 Hot Files Detection, Import Graph, Annotations**
 
 ## Quick Setup
 
@@ -73,47 +73,38 @@ Add to your IDE's MCP config file:
 
 ## Usage
 
-### Tools (AI calls these)
+### Tools (10 exposed — optimized for minimal token overhead)
 
 ```bash
-# Start of conversation (default: compact format)
-get_project_context
+# ─── Project Context ───
+get_project_context                                # Full context (default: compact)
+get_project_context { "format": "ultra" }          # Ultra-efficient (~165 tokens)
+get_project_context { "section": "stack" }         # Specific section only
+get_project_context { "section": "endpoints" }     # Sections: stack|structure|endpoints|models|status|hotfiles|imports|annotations
+get_project_context { "force_refresh": true }      # Force re-analysis
 
-# Ultra-efficient (~165 tokens)
-get_project_context { "format": "ultra" }
+# ─── Smart File Reading (v1.5.2) ───
+read_file { "file": "src/server.ts" }              # Smart: full if <200L, outline if >200L
+read_file { "file": "src/server.ts", "start_line": 100, "end_line": 150 }  # Range
+read_file_outline { "file": "src/server.ts" }      # Outline: symbols + line ranges
+read_file_symbol { "file": "src/server.ts", "symbol": "createServer" }     # Fuzzy match
 
-# Minimal for quick awareness (~50 tokens)
-get_project_context { "format": "minimal" }
+# ─── Search (v1.5.2) ───
+search_in_file { "file": "src/server.ts", "pattern": "TODO" }             # In-file
+search_in_project { "pattern": "handleRoute" }                            # Cross-file grep
+search_in_project { "pattern": "export", "file_pattern": "*.tsx" }        # With glob filter
 
-# Specific info only
-get_project_stack
-get_project_structure
-get_project_endpoints
-get_project_models
-get_project_status
+# ─── File Listing (v1.5.2) ───
+list_files                                          # Project root
+list_files { "path": "src", "pattern": "*.ts" }     # Filtered
 
-# v1.3.0 — New intelligence tools
-get_project_hotfiles                              # Complex/oversized files
-get_project_imports                               # Dependency graph (text)
-get_project_imports { "format": "mermaid" }       # Dependency graph (visual)
-get_project_annotations                           # Business rules & gotchas
-generate_project_docs                             # Force regenerate .repo-context/
+# ─── Annotations ───
+annotate { "action": "list" }
+annotate { "action": "add", "category": "businessRules", "text": "..." }
+annotate { "action": "remove", "category": "gotchas", "index": 0 }
 
-# v1.5.0 — Smart File Reader (token-efficient)
-read_file_outline { "file": "src/server.ts" }     # Outline: symbols + line ranges
-read_file_lines { "file": "src/server.ts", "start_line": 100, "end_line": 150 }
-read_file_symbol { "file": "src/server.ts", "symbol": "createServer" }
-search_in_file { "file": "src/server.ts", "pattern": "TODO" }
-
-# v1.2.0 — Annotation management
-add_annotation { "category": "businessRules", "text": "..." }
-add_annotation { "category": "gotchas", "text": "..." }
-add_annotation { "category": "warnings", "text": "..." }
-remove_annotation { "category": "gotchas", "index": 0 }
-list_annotations
-
-# After major changes
-refresh_project_context
+# ─── Docs ───
+generate_project_docs                               # Force regenerate .repo-context/
 ```
 
 ### Resources (Zero Token Cost!)

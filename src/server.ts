@@ -19,6 +19,9 @@ import {
 	readFileLines,
 	readFileSymbol,
 	searchInFile,
+	searchInProject,
+	listFiles,
+	readFile,
 } from './tools/index.js';
 import {ProjectContext} from './types/index.js';
 import {startWatcher} from './watcher.js';
@@ -42,14 +45,14 @@ const PROJECT_ROOT = process.env.REPO_CONTEXT_ROOT || process.cwd();
 // Output format type
 type OutputFormat = 'ultra' | 'compact' | 'normal' | 'minimal' | 'json';
 
-// Define available tools - OPTIMIZED for minimal token usage
+// Define available tools - OPTIMIZED: only non-redundant tools exposed (21→10)
+// Removed tools still work via handlers for backward compatibility,
+// but are NOT listed = ~880 fewer tokens per API message.
 const tools: Tool[] = [
 	{
 		name: 'get_project_context',
-		description: `IMPORTANT: Call this tool FIRST at the START of every conversation to understand the project.
-Returns analyzed project context (stack, structure, endpoints, models).
-Format options: ultra (~50 tokens), compact (~150, default), normal (full).
-This replaces the need to explore the codebase manually.`,
+		description:
+			'Call FIRST. Returns project context. Use section param for specific info.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -58,242 +61,146 @@ This replaces the need to explore the codebase manually.`,
 					enum: ['ultra', 'compact', 'normal', 'minimal', 'json'],
 					description: 'Output format (default: compact)',
 				},
+				section: {
+					type: 'string',
+					enum: [
+						'all',
+						'stack',
+						'structure',
+						'endpoints',
+						'models',
+						'status',
+						'hotfiles',
+						'imports',
+						'annotations',
+					],
+					description: 'Specific section (default: all)',
+				},
 				force_refresh: {
 					type: 'boolean',
-					description: 'Force re-analysis (default: false)',
+					description: 'Force re-analysis',
 				},
 			},
 			required: [],
 		},
 	},
 	{
-		name: 'refresh_project_context',
-		description: 'Re-analyzes project. Use after major changes.',
-		inputSchema: {
-			type: 'object',
-			properties: {},
-			required: [],
-		},
-	},
-	{
-		name: 'get_project_stack',
-		description: 'Returns tech stack only: lang, frameworks, deps.',
-		inputSchema: {
-			type: 'object',
-			properties: {},
-			required: [],
-		},
-	},
-	{
-		name: 'get_project_structure',
-		description: 'Returns folder structure and entry points only.',
-		inputSchema: {
-			type: 'object',
-			properties: {},
-			required: [],
-		},
-	},
-	{
-		name: 'get_project_endpoints',
-		description: 'Returns API endpoints only.',
-		inputSchema: {
-			type: 'object',
-			properties: {},
-			required: [],
-		},
-	},
-	{
-		name: 'get_project_models',
-		description: 'Returns data models/schemas only.',
-		inputSchema: {
-			type: 'object',
-			properties: {},
-			required: [],
-		},
-	},
-	{
-		name: 'get_project_status',
-		description: 'Returns project status: tests, CI, Docker, TODOs.',
-		inputSchema: {
-			type: 'object',
-			properties: {},
-			required: [],
-		},
-	},
-	{
-		name: 'get_project_hotfiles',
+		name: 'annotate',
 		description:
-			'Returns large/complex files that need special attention (oversized, high imports, todo-dense).',
-		inputSchema: {
-			type: 'object',
-			properties: {},
-			required: [],
-		},
-	},
-	{
-		name: 'get_project_annotations',
-		description: 'Returns human-written business rules, gotchas, and warnings.',
-		inputSchema: {
-			type: 'object',
-			properties: {},
-			required: [],
-		},
-	},
-	{
-		name: 'get_project_imports',
-		description:
-			'Returns internal import graph: hub files, orphan files. Use format "mermaid" for visual diagram.',
+			'Add/remove/list project annotations (business rules, gotchas, warnings).',
 		inputSchema: {
 			type: 'object',
 			properties: {
-				format: {
+				action: {
 					type: 'string',
-					enum: ['text', 'mermaid'],
-					description: 'Output format: text (default) or mermaid (visual diagram)',
+					enum: ['list', 'add', 'remove'],
+					description: 'Action to perform',
 				},
-			},
-			required: [],
-		},
-	},
-	{
-		name: 'add_annotation',
-		description:
-			'Adds a business rule, gotcha, or warning to the project annotations.',
-		inputSchema: {
-			type: 'object',
-			properties: {
 				category: {
 					type: 'string',
 					enum: ['businessRules', 'gotchas', 'warnings'],
-					description: 'Annotation category',
+					description: 'Category (required for add/remove)',
 				},
 				text: {
 					type: 'string',
-					description: 'The annotation text to add',
-				},
-			},
-			required: ['category', 'text'],
-		},
-	},
-	{
-		name: 'remove_annotation',
-		description:
-			'Removes an annotation by category and index. Use list_annotations first to see indices.',
-		inputSchema: {
-			type: 'object',
-			properties: {
-				category: {
-					type: 'string',
-					enum: ['businessRules', 'gotchas', 'warnings'],
-					description: 'Annotation category',
+					description: 'Text to add (required for add)',
 				},
 				index: {
 					type: 'number',
-					description: 'Index of the annotation to remove (0-based)',
+					description: 'Index to remove (required for remove)',
 				},
 			},
-			required: ['category', 'index'],
+			required: ['action'],
 		},
 	},
 	{
-		name: 'list_annotations',
+		name: 'read_file',
 		description:
-			'Lists all project annotations with indices for easy management.',
-		inputSchema: {
-			type: 'object',
-			properties: {},
-			required: [],
-		},
-	},
-	{
-		name: 'generate_project_docs',
-		description:
-			'Regenerates .repo-context/ auto-docs. Usually automatic via file watcher, use only if needed.',
-		inputSchema: {
-			type: 'object',
-			properties: {},
-			required: [],
-		},
-	},
-	// ─── Smart File Reader Tools (v1.5.0) ───
-	{
-		name: 'read_file_outline',
-		description:
-			'Returns outline of a file: all functions, classes, interfaces, types with line ranges. Use BEFORE reading a large file to know what to target. ~100 tokens.',
+			'Smart reader. <200L: full content. >200L: outline. Optional line range.',
 		inputSchema: {
 			type: 'object',
 			properties: {
 				file: {
 					type: 'string',
-					description: 'Relative path to file (e.g. src/server.ts)',
+					description: 'Relative path to file',
 				},
+				start_line: {type: 'number', description: 'Start line'},
+				end_line: {type: 'number', description: 'End line'},
 			},
 			required: ['file'],
 		},
 	},
 	{
-		name: 'read_file_lines',
-		description:
-			'Reads specific line range from a file. Max 200 lines per call. Use after read_file_outline to read only what you need.',
+		name: 'read_file_outline',
+		description: 'File outline: symbols with line ranges (~100 tokens).',
 		inputSchema: {
 			type: 'object',
 			properties: {
-				file: {
-					type: 'string',
-					description: 'Relative path to file',
-				},
-				start_line: {
-					type: 'number',
-					description: 'Start line (1-indexed)',
-				},
-				end_line: {
-					type: 'number',
-					description: 'End line (1-indexed, max 200 lines from start)',
-				},
+				file: {type: 'string', description: 'Relative path'},
 			},
-			required: ['file', 'start_line', 'end_line'],
+			required: ['file'],
 		},
 	},
 	{
 		name: 'read_file_symbol',
-		description:
-			'Reads a specific function, class, or interface by name. Returns complete code block. Use after read_file_outline to get symbol names.',
+		description: 'Read function/class by name. Fuzzy matching supported.',
 		inputSchema: {
 			type: 'object',
 			properties: {
-				file: {
-					type: 'string',
-					description: 'Relative path to file',
-				},
-				symbol: {
-					type: 'string',
-					description: 'Symbol name (function, class, interface, type)',
-				},
+				file: {type: 'string', description: 'Relative path'},
+				symbol: {type: 'string', description: 'Symbol name'},
 			},
 			required: ['file', 'symbol'],
 		},
 	},
 	{
 		name: 'search_in_file',
-		description:
-			'Search for a pattern in a file. Returns matches with ±N lines of context. Max 10 matches.',
+		description: 'Search pattern in file. Regex supported.',
 		inputSchema: {
 			type: 'object',
 			properties: {
-				file: {
-					type: 'string',
-					description: 'Relative path to file',
-				},
-				pattern: {
-					type: 'string',
-					description: 'Search pattern (string or regex)',
-				},
-				context_lines: {
-					type: 'number',
-					description: 'Lines of context around each match (default: 3, max: 10)',
-				},
+				file: {type: 'string', description: 'Relative path'},
+				pattern: {type: 'string', description: 'Pattern (string/regex)'},
+				context_lines: {type: 'number', description: 'Context lines (default: 2)'},
+				max_matches: {type: 'number', description: 'Max matches (default: 50)'},
 			},
 			required: ['file', 'pattern'],
+		},
+	},
+	{
+		name: 'search_in_project',
+		description: 'Search across all project files. Replaces grep.',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				pattern: {type: 'string', description: 'Pattern (string/regex)'},
+				file_pattern: {type: 'string', description: 'Glob filter (e.g. "*.tsx")'},
+				max_results: {type: 'number', description: 'Max results (default: 30)'},
+				context_lines: {type: 'number', description: 'Context lines (default: 1)'},
+			},
+			required: ['pattern'],
+		},
+	},
+	{
+		name: 'list_files',
+		description: 'List files/dirs. Respects .gitignore.',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				path: {type: 'string', description: 'Dir path (default: root)'},
+				pattern: {type: 'string', description: 'Glob filter'},
+				max_depth: {type: 'number', description: 'Depth (default: 3)'},
+			},
+			required: [],
+		},
+	},
+	{
+		name: 'generate_project_docs',
+		description: 'Regenerate .repo-context/ docs. Usually automatic.',
+		inputSchema: {
+			type: 'object',
+			properties: {},
+			required: [],
 		},
 	},
 ];
@@ -620,7 +527,7 @@ export function createServer(): Server {
 	const server = new Server(
 		{
 			name: 'repo-context-mcp',
-			version: '1.5.1',
+			version: '1.5.2',
 		},
 		{
 			capabilities: {
@@ -916,11 +823,112 @@ export function createServer(): Server {
 			switch (name) {
 				case 'get_project_context': {
 					const typedArgs = args as
-						| {format?: OutputFormat; force_refresh?: boolean}
+						| {format?: OutputFormat; section?: string; force_refresh?: boolean}
 						| undefined;
 					const format = typedArgs?.format ?? 'compact';
 					const forceRefresh = typedArgs?.force_refresh ?? false;
+					const section = typedArgs?.section ?? 'all';
 					context = await getFullContext(PROJECT_ROOT, forceRefresh);
+
+					// Handle specific section requests
+					if (section !== 'all') {
+						let sectionText = '';
+						switch (section) {
+							case 'stack':
+								sectionText = [
+									`${context.name}|${context.stack.primaryLanguage}`,
+									context.stack.frameworks.length > 0
+										? `fw:${context.stack.frameworks.map((f) => f.name).join(',')}`
+										: '',
+									context.stack.packageManager
+										? `pkg:${context.stack.packageManager}`
+										: '',
+									`deps:${context.stack.dependencies
+										.filter((d) => !d.dev)
+										.slice(0, 10)
+										.map((d) => d.name)
+										.join(',')}`,
+								]
+									.filter(Boolean)
+									.join('\n');
+								break;
+							case 'structure':
+								sectionText = [
+									`→${context.structure.entryPoints.join(',')}`,
+									context.structure.folders
+										.map((f) => `${f.path}:${f.fileCount}`)
+										.join(' '),
+									`cfg:${context.structure.configFiles.join(',')}`,
+								].join('\n');
+								break;
+							case 'endpoints':
+								sectionText = context.endpoints?.endpoints.length
+									? context.endpoints.endpoints
+											.slice(0, 20)
+											.map((ep) => `${ep.method[0]}:${ep.path}→${ep.file}:${ep.line}`)
+											.join('\n')
+									: 'No API endpoints.';
+								break;
+							case 'models':
+								sectionText = context.models?.models.length
+									? context.models.models
+											.slice(0, 15)
+											.map(
+												(m) =>
+													`${m.name}(${m.type}):${m.fields
+														.slice(0, 4)
+														.map((f) => f.name)
+														.join(',')}`
+											)
+											.join('\n')
+									: 'No models.';
+								break;
+							case 'status':
+								sectionText = [
+									`test:${context.status.tests.testFiles}${
+										context.status.tests.framework
+											? '(' + context.status.tests.framework + ')'
+											: ''
+									}`,
+									context.status.hasDocker ? 'docker:yes' : '',
+									context.status.hasCI ? `ci:${context.status.ciPlatform}` : '',
+									context.status.todos.length > 0
+										? `todos:${context.status.todos.length}`
+										: '',
+								]
+									.filter(Boolean)
+									.join('|');
+								break;
+							case 'hotfiles':
+								sectionText = context.hotFiles?.files.length
+									? context.hotFiles.files
+											.map((f) => `${f.file} (${f.lines}L) [${f.reason}]`)
+											.join('\n')
+									: 'No hot files.';
+								break;
+							case 'imports':
+								if (context.importGraph?.nodes.length) {
+									const lines: string[] = [];
+									if (context.importGraph.mostImported.length)
+										lines.push(`Hub: ${context.importGraph.mostImported.join(', ')}`);
+									if (context.importGraph.orphans.length)
+										lines.push(`Orphans: ${context.importGraph.orphans.join(', ')}`);
+									sectionText = lines.join('\n');
+								} else {
+									sectionText = 'No import graph.';
+								}
+								break;
+							case 'annotations': {
+								const annots = await readAnnotations(PROJECT_ROOT);
+								sectionText = formatAnnotations(annots);
+								break;
+							}
+							default:
+								sectionText = `Unknown section: ${section}`;
+						}
+						return {content: [{type: 'text', text: sectionText}]};
+					}
+
 					return {
 						content: [
 							{
@@ -928,6 +936,84 @@ export function createServer(): Server {
 								text: formatByType(context, format),
 							},
 						],
+					};
+				}
+
+				// ─── Unified annotate handler ───
+				case 'annotate': {
+					const aArgs = args as {
+						action: string;
+						category?: string;
+						text?: string;
+						index?: number;
+					};
+					if (!aArgs?.action) {
+						return {
+							content: [
+								{type: 'text', text: 'Error: action is required (list/add/remove).'},
+							],
+							isError: true,
+						};
+					}
+					if (aArgs.action === 'list') {
+						const allAnnotations = await readAnnotations(PROJECT_ROOT);
+						return {
+							content: [{type: 'text', text: formatAnnotations(allAnnotations)}],
+						};
+					}
+					if (aArgs.action === 'add') {
+						if (!aArgs.category || !aArgs.text) {
+							return {
+								content: [
+									{type: 'text', text: 'Error: category and text required for add.'},
+								],
+								isError: true,
+							};
+						}
+						const updated = await addAnnotation(
+							PROJECT_ROOT,
+							aArgs.category as keyof import('./types/index.js').Annotations,
+							aArgs.text
+						);
+						await refreshContext(PROJECT_ROOT);
+						return {
+							content: [
+								{
+									type: 'text',
+									text: `Added to ${aArgs.category}.\n\n${formatAnnotations(updated)}`,
+								},
+							],
+						};
+					}
+					if (aArgs.action === 'remove') {
+						if (!aArgs.category || aArgs.index === undefined) {
+							return {
+								content: [
+									{type: 'text', text: 'Error: category and index required for remove.'},
+								],
+								isError: true,
+							};
+						}
+						const afterRemove = await removeAnnotation(
+							PROJECT_ROOT,
+							aArgs.category as keyof import('./types/index.js').Annotations,
+							aArgs.index
+						);
+						await refreshContext(PROJECT_ROOT);
+						return {
+							content: [
+								{
+									type: 'text',
+									text: `Removed from ${aArgs.category}.\n\n${formatAnnotations(
+										afterRemove
+									)}`,
+								},
+							],
+						};
+					}
+					return {
+						content: [{type: 'text', text: `Unknown action: ${aArgs.action}`}],
+						isError: true,
 					};
 				}
 
@@ -1288,6 +1374,7 @@ export function createServer(): Server {
 						file: string;
 						pattern: string;
 						context_lines?: number;
+						max_matches?: number;
 					};
 					if (!searchArgs?.file || !searchArgs?.pattern) {
 						return {
@@ -1299,10 +1386,76 @@ export function createServer(): Server {
 						PROJECT_ROOT,
 						searchArgs.file,
 						searchArgs.pattern,
-						searchArgs.context_lines
+						searchArgs.context_lines,
+						searchArgs.max_matches
 					);
 					return {
 						content: [{type: 'text', text: searchResult}],
+					};
+				}
+
+				case 'search_in_project': {
+					const spArgs = args as {
+						pattern: string;
+						file_pattern?: string;
+						max_results?: number;
+						context_lines?: number;
+					};
+					if (!spArgs?.pattern) {
+						return {
+							content: [{type: 'text', text: 'Error: pattern is required.'}],
+							isError: true,
+						};
+					}
+					const projectSearchResult = await searchInProject(
+						PROJECT_ROOT,
+						spArgs.pattern,
+						spArgs.file_pattern,
+						spArgs.max_results,
+						spArgs.context_lines
+					);
+					return {
+						content: [{type: 'text', text: projectSearchResult}],
+					};
+				}
+
+				case 'list_files': {
+					const lfArgs = args as {
+						path?: string;
+						pattern?: string;
+						max_depth?: number;
+					};
+					const listResult = await listFiles(
+						PROJECT_ROOT,
+						lfArgs?.path,
+						lfArgs?.pattern,
+						lfArgs?.max_depth
+					);
+					return {
+						content: [{type: 'text', text: listResult}],
+					};
+				}
+
+				case 'read_file': {
+					const rfArgs = args as {
+						file: string;
+						start_line?: number;
+						end_line?: number;
+					};
+					if (!rfArgs?.file) {
+						return {
+							content: [{type: 'text', text: 'Error: file is required.'}],
+							isError: true,
+						};
+					}
+					const readResult = await readFile(
+						PROJECT_ROOT,
+						rfArgs.file,
+						rfArgs.start_line,
+						rfArgs.end_line
+					);
+					return {
+						content: [{type: 'text', text: readResult}],
 					};
 				}
 

@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import {FileSymbol} from '../types/index.js';
+import ignore from 'ignore';
 
 // ─── LINE-BY-LINE SYMBOL EXTRACTOR ───
 // Instead of multi-line regex, we scan each line for symbol definitions.
@@ -554,7 +555,7 @@ export async function readFileLines(
 
 /**
  * Read a specific symbol (function, class, interface) from a file by name.
- * Returns the complete code block.
+ * Uses fuzzy matching: exact → case-insensitive → substring → Levenshtein-like.
  */
 export async function readFileSymbol(
 	projectRoot: string,
@@ -563,20 +564,36 @@ export async function readFileSymbol(
 ): Promise<string> {
 	const {symbols, totalLines} = await getFileOutline(projectRoot, filePath);
 
-	// Find the symbol
-	const symbol = symbols.find(
-		(s) =>
-			s.name === symbolName || s.name.toLowerCase() === symbolName.toLowerCase()
-	);
+	// 1. Exact match
+	let symbol = symbols.find((s) => s.name === symbolName);
 
+	// 2. Case-insensitive
 	if (!symbol) {
-		const available = symbols
-			.map((s) => `${s.type}:${s.name} L${s.startLine}`)
-			.join(', ');
-		return `Symbol "${symbolName}" not found.\nAvailable: ${available}`;
+		const lower = symbolName.toLowerCase();
+		symbol = symbols.find((s) => s.name.toLowerCase() === lower);
 	}
 
-	// Read the lines
+	// 3. Substring match (symbolName is contained in or contains the symbol name)
+	if (!symbol) {
+		const lower = symbolName.toLowerCase();
+		symbol = symbols.find(
+			(s) =>
+				s.name.toLowerCase().includes(lower) || lower.includes(s.name.toLowerCase())
+		);
+	}
+
+	// 4. Similarity-based: find top 3 most similar names
+	if (!symbol) {
+		const scored = symbols
+			.map((s) => ({sym: s, score: similarity(symbolName, s.name)}))
+			.sort((a, b) => b.score - a.score)
+			.slice(0, 3);
+		const suggestions = scored
+			.map((s) => `${s.sym.type}:${s.sym.name} L${s.sym.startLine}`)
+			.join(', ');
+		return `Symbol "${symbolName}" not found. Similar: ${suggestions}`;
+	}
+
 	const result = await readFileLines(
 		projectRoot,
 		filePath,
@@ -591,13 +608,14 @@ export async function readFileSymbol(
 
 /**
  * Search for a pattern in a file, return matches with ±N lines of context.
- * Max 10 matches.
+ * Configurable max matches (default: 50).
  */
 export async function searchInFile(
 	projectRoot: string,
 	filePath: string,
 	pattern: string,
-	contextLines: number = 3
+	contextLines: number = 2,
+	maxMatches: number = 50
 ): Promise<string> {
 	const fullPath = resolveFilePath(projectRoot, filePath);
 	const content = await fs.readFile(fullPath, 'utf-8');
@@ -605,7 +623,6 @@ export async function searchInFile(
 	const total = lines.length;
 	const results: string[] = [];
 
-	// Try as regex first, fallback to literal
 	let regex: RegExp;
 	try {
 		regex = new RegExp(pattern, 'gi');
@@ -614,38 +631,395 @@ export async function searchInFile(
 	}
 
 	const ctx = Math.max(0, Math.min(contextLines, 10));
+	const max = Math.max(1, Math.min(maxMatches, 100));
 	let matchCount = 0;
 
-	for (let i = 0; i < lines.length && matchCount < 10; i++) {
+	for (let i = 0; i < lines.length && matchCount < max; i++) {
 		if (regex.test(lines[i])) {
-			regex.lastIndex = 0; // reset for global flag
+			regex.lastIndex = 0;
 			matchCount++;
-			const start = Math.max(0, i - ctx);
-			const end = Math.min(lines.length - 1, i + ctx);
 
-			results.push(`--- Match ${matchCount} at L${i + 1} ---`);
-			for (let j = start; j <= end; j++) {
-				const marker = j === i ? '>' : ' ';
-				results.push(`${marker}${j + 1}: ${lines[j]}`);
+			if (ctx === 0) {
+				// Ultra-compact: just the matching line
+				results.push(`L${i + 1}:${lines[i]}`);
+			} else {
+				const start = Math.max(0, i - ctx);
+				const end = Math.min(lines.length - 1, i + ctx);
+				results.push(`L${i + 1}:`);
+				for (let j = start; j <= end; j++) {
+					const marker = j === i ? '>' : ' ';
+					results.push(`${marker}${j + 1}: ${lines[j]}`);
+				}
 			}
-			results.push('');
 		}
 	}
 
-	if (results.length === 0) {
+	if (matchCount === 0) {
 		return `No matches for "${pattern}" in ${path.relative(
 			projectRoot,
 			fullPath
 		)}`;
 	}
 
+	const truncated = matchCount >= max ? ` (truncated at ${max})` : '';
 	return `[${path.relative(
 		projectRoot,
 		fullPath
-	)}] ${matchCount} matches (${total} lines total)\n${results.join('\n')}`;
+	)}] ${matchCount} matches${truncated}\n${results.join('\n')}`;
+}
+
+// ─── SEARCH IN PROJECT ───
+
+/**
+ * Search for a pattern across all project files.
+ * Replaces need for native grep/ripgrep.
+ */
+export async function searchInProject(
+	projectRoot: string,
+	pattern: string,
+	filePattern?: string,
+	maxResults: number = 30,
+	contextLines: number = 1
+): Promise<string> {
+	const results: string[] = [];
+	let totalMatches = 0;
+	let filesSearched = 0;
+	let filesMatched = 0;
+	const max = Math.max(1, Math.min(maxResults, 100));
+
+	let regex: RegExp;
+	try {
+		regex = new RegExp(pattern, 'gi');
+	} catch {
+		regex = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+	}
+
+	// Load gitignore
+	const ig = ignore();
+	try {
+		const gitignoreContent = await fs.readFile(
+			path.join(projectRoot, '.gitignore'),
+			'utf-8'
+		);
+		ig.add(gitignoreContent);
+	} catch {
+		// No .gitignore
+	}
+	ig.add([
+		'node_modules',
+		'.git',
+		'dist',
+		'build',
+		'.next',
+		'coverage',
+		'__pycache__',
+		'.repo-context',
+	]);
+
+	// File pattern matching
+	const fileGlob = filePattern ? globToRegex(filePattern) : null;
+
+	const ctx = Math.max(0, Math.min(contextLines, 5));
+
+	async function scan(dir: string, depth = 0): Promise<void> {
+		if (depth > 10 || totalMatches >= max) return;
+		try {
+			const entries = await fs.readdir(dir, {withFileTypes: true});
+			for (const entry of entries) {
+				if (totalMatches >= max) break;
+				const fullPath = path.join(dir, entry.name);
+				const relativePath = path.relative(projectRoot, fullPath);
+
+				if (ig.ignores(relativePath)) continue;
+
+				if (entry.isDirectory()) {
+					await scan(fullPath, depth + 1);
+				} else if (entry.isFile()) {
+					if (fileGlob && !fileGlob.test(entry.name) && !fileGlob.test(relativePath))
+						continue;
+					if (isBinaryExtension(entry.name)) continue;
+
+					try {
+						const content = await fs.readFile(fullPath, 'utf-8');
+						const lines = content.split('\n');
+						filesSearched++;
+						let fileHasMatch = false;
+
+						for (let i = 0; i < lines.length && totalMatches < max; i++) {
+							if (regex.test(lines[i])) {
+								regex.lastIndex = 0;
+								totalMatches++;
+								if (!fileHasMatch) {
+									filesMatched++;
+									fileHasMatch = true;
+								}
+
+								if (ctx === 0) {
+									results.push(`${relativePath}:${i + 1}:${lines[i].trim()}`);
+								} else {
+									const start = Math.max(0, i - ctx);
+									const end = Math.min(lines.length - 1, i + ctx);
+									results.push(`${relativePath}:${i + 1}:`);
+									for (let j = start; j <= end; j++) {
+										const marker = j === i ? '>' : ' ';
+										results.push(`${marker}${j + 1}: ${lines[j]}`);
+									}
+								}
+							}
+						}
+					} catch {
+						// skip unreadable files
+					}
+				}
+			}
+		} catch {
+			// skip unreadable dirs
+		}
+	}
+
+	await scan(projectRoot);
+
+	if (totalMatches === 0) {
+		return `No matches for "${pattern}" in project (${filesSearched} files searched)`;
+	}
+
+	const truncated = totalMatches >= max ? ` (truncated at ${max})` : '';
+	return `${totalMatches} matches in ${filesMatched} files${truncated}\n${results.join(
+		'\n'
+	)}`;
+}
+
+// ─── LIST FILES ───
+
+/**
+ * List files and directories in the project.
+ * Replaces need for native list_dir / find_by_name.
+ */
+export async function listFiles(
+	projectRoot: string,
+	dirPath: string = '.',
+	pattern?: string,
+	maxDepth: number = 3
+): Promise<string> {
+	const fullPath = resolveFilePath(projectRoot, dirPath);
+	const results: string[] = [];
+
+	// Load gitignore
+	const ig = ignore();
+	try {
+		const gitignoreContent = await fs.readFile(
+			path.join(projectRoot, '.gitignore'),
+			'utf-8'
+		);
+		ig.add(gitignoreContent);
+	} catch {
+		// No .gitignore
+	}
+	ig.add([
+		'node_modules',
+		'.git',
+		'dist',
+		'build',
+		'.next',
+		'coverage',
+		'__pycache__',
+		'.repo-context',
+	]);
+
+	const fileGlob = pattern ? globToRegex(pattern) : null;
+
+	async function scan(
+		dir: string,
+		depth: number,
+		prefix: string
+	): Promise<void> {
+		if (depth > maxDepth) return;
+		try {
+			const entries = await fs.readdir(dir, {withFileTypes: true});
+			const sorted = entries.sort((a, b) => {
+				// Dirs first, then files
+				if (a.isDirectory() && !b.isDirectory()) return -1;
+				if (!a.isDirectory() && b.isDirectory()) return 1;
+				return a.name.localeCompare(b.name);
+			});
+
+			for (const entry of sorted) {
+				const entryPath = path.join(dir, entry.name);
+				const relativePath = path.relative(projectRoot, entryPath);
+
+				if (ig.ignores(relativePath + (entry.isDirectory() ? '/' : ''))) continue;
+
+				if (entry.isDirectory()) {
+					// Count children
+					let childCount = 0;
+					try {
+						const children = await fs.readdir(entryPath);
+						childCount = children.length;
+					} catch {
+						/* skip */
+					}
+					results.push(`${prefix}📁 ${entry.name}/ (${childCount})`);
+					await scan(entryPath, depth + 1, prefix + '  ');
+				} else if (entry.isFile()) {
+					if (fileGlob && !fileGlob.test(entry.name)) continue;
+					try {
+						const stat = await fs.stat(entryPath);
+						const size = formatSize(stat.size);
+						results.push(`${prefix}📄 ${entry.name} ${size}`);
+					} catch {
+						results.push(`${prefix}📄 ${entry.name}`);
+					}
+				}
+			}
+		} catch {
+			// skip unreadable dirs
+		}
+	}
+
+	const relativeDirPath = path.relative(projectRoot, fullPath) || '.';
+	results.push(`📁 ${relativeDirPath}/`);
+	await scan(fullPath, 0, '  ');
+
+	return results.join('\n');
+}
+
+// ─── READ FILE (SMART) ───
+
+/**
+ * Smart file reader:
+ * - With line range → reads that range (like readFileLines)
+ * - File ≤200 lines → returns full content
+ * - File >200 lines → returns outline with hint to use read_file_symbol
+ */
+export async function readFile(
+	projectRoot: string,
+	filePath: string,
+	startLine?: number,
+	endLine?: number
+): Promise<string> {
+	const fullPath = resolveFilePath(projectRoot, filePath);
+	const content = await fs.readFile(fullPath, 'utf-8');
+	const lines = content.split('\n');
+	const total = lines.length;
+	const relPath = path.relative(projectRoot, fullPath);
+
+	// If line range specified, use it
+	if (startLine !== undefined && endLine !== undefined) {
+		return readFileLines(projectRoot, filePath, startLine, endLine);
+	}
+
+	// Small file: return complete content
+	if (total <= 200) {
+		const numbered = lines.map((line, i) => `${i + 1}: ${line}`).join('\n');
+		return `[${relPath}] ${total} lines (full)\n${numbered}`;
+	}
+
+	// Large file: return outline + hint
+	const outline = await getFileOutline(projectRoot, filePath);
+	return `[${relPath}] ${total} lines (large — showing outline)\n${outline.formatted}\n\nUse read_file_symbol(file, symbolName) to read specific symbols, or read_file(file, startLine, endLine) for a range.`;
 }
 
 // ─── HELPERS ───
+
+/**
+ * Simple string similarity (0 to 1) based on longest common subsequence ratio.
+ */
+function similarity(a: string, b: string): number {
+	const al = a.toLowerCase();
+	const bl = b.toLowerCase();
+	if (al === bl) return 1;
+	const maxLen = Math.max(al.length, bl.length);
+	if (maxLen === 0) return 1;
+
+	// LCS length
+	const m = al.length;
+	const n = bl.length;
+	const dp: number[][] = Array.from({length: m + 1}, () =>
+		new Array(n + 1).fill(0)
+	);
+	for (let i = 1; i <= m; i++) {
+		for (let j = 1; j <= n; j++) {
+			dp[i][j] =
+				al[i - 1] === bl[j - 1]
+					? dp[i - 1][j - 1] + 1
+					: Math.max(dp[i - 1][j], dp[i][j - 1]);
+		}
+	}
+	return dp[m][n] / maxLen;
+}
+
+/**
+ * Convert a simple glob pattern to a RegExp.
+ * Supports * (any chars), ? (single char), and ** (recursive).
+ */
+function globToRegex(glob: string): RegExp {
+	const escaped = glob
+		.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+		.replace(/\*\*/g, '§DOUBLE§')
+		.replace(/\*/g, '[^/]*')
+		.replace(/\?/g, '.')
+		.replace(/§DOUBLE§/g, '.*');
+	return new RegExp(`^${escaped}$|${escaped}$`, 'i');
+}
+
+/**
+ * Check if a file has a binary extension (skip during search).
+ */
+function isBinaryExtension(filename: string): boolean {
+	const binaryExts = new Set([
+		'.png',
+		'.jpg',
+		'.jpeg',
+		'.gif',
+		'.bmp',
+		'.ico',
+		'.svg',
+		'.webp',
+		'.mp3',
+		'.mp4',
+		'.avi',
+		'.mov',
+		'.mkv',
+		'.flac',
+		'.wav',
+		'.zip',
+		'.tar',
+		'.gz',
+		'.bz2',
+		'.7z',
+		'.rar',
+		'.pdf',
+		'.doc',
+		'.docx',
+		'.xls',
+		'.xlsx',
+		'.ppt',
+		'.pptx',
+		'.woff',
+		'.woff2',
+		'.ttf',
+		'.eot',
+		'.otf',
+		'.exe',
+		'.dll',
+		'.so',
+		'.dylib',
+		'.bin',
+		'.lock',
+		'.map',
+	]);
+	const ext = path.extname(filename).toLowerCase();
+	return binaryExts.has(ext);
+}
+
+/**
+ * Format file size in human-readable form.
+ */
+function formatSize(bytes: number): string {
+	if (bytes < 1024) return `${bytes}B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}K`;
+	return `${(bytes / (1024 * 1024)).toFixed(1)}M`;
+}
 
 /**
  * Find the end of a code block starting at a given line.

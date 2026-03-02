@@ -9,5 +9,8 @@ export {
 	readFileLines,
 	readFileSymbol,
 	searchInFile,
+	searchInProject,
+	listFiles,
+	readFile,
 	getAllOutlines,
 } from './file-reader.js';
