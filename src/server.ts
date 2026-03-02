@@ -527,7 +527,7 @@ export function createServer(): Server {
 	const server = new Server(
 		{
 			name: 'repo-context-mcp',
-			version: '1.5.2',
+			version: '1.5.3',
 		},
 		{
 			capabilities: {

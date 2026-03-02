@@ -2,6 +2,13 @@
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. **Better than CLAUDE.md** because it's dynamic, accurate, and uses minimal tokens.
 
+## What's New in v1.5.3
+
+- **🧠 In-Memory File Cache**: 10s TTL — avoids redundant disk reads during multi-step workflows
+- **📦 Outline Cache**: Parsed outlines cached separately — `read_file` → `read_file_symbol` uses 1 read instead of 3
+- **⚡ Parallel Search**: `search_in_project` processes files in batches of 10 via `Promise.all`
+- **🔒 Thread-safe Regex**: Per-file regex instances in parallel search to avoid `lastIndex` conflicts
+
 ## What's New in v1.5.2
 
 - **🔍 `search_in_project`**: Cross-file search replacing native grep — respects `.gitignore`

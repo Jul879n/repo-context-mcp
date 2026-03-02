@@ -3,6 +3,68 @@ import * as path from 'path';
 import {FileSymbol} from '../types/index.js';
 import ignore from 'ignore';
 
+// ─── FILE CACHE ───
+// In-memory cache to avoid redundant disk reads within the same MCP session.
+// TTL: 10s — sufficient for multi-step AI workflows (outline → symbol → lines).
+
+interface CacheEntry {
+	content: string;
+	lines: string[];
+	mtime: number;
+	cachedAt: number;
+}
+
+interface OutlineCacheEntry {
+	symbols: FileSymbol[];
+	totalLines: number;
+	formatted: string;
+	cachedAt: number;
+}
+
+const CACHE_TTL_MS = 10_000;
+const fileCache = new Map<string, CacheEntry>();
+const outlineCache = new Map<string, OutlineCacheEntry>();
+
+async function getCachedFile(
+	fullPath: string
+): Promise<{content: string; lines: string[]}> {
+	const now = Date.now();
+	const cached = fileCache.get(fullPath);
+
+	if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
+		// Verify mtime hasn't changed
+		try {
+			const stat = await fs.stat(fullPath);
+			if (stat.mtimeMs === cached.mtime) {
+				return {content: cached.content, lines: cached.lines};
+			}
+		} catch {
+			// If stat fails, fall through to re-read
+		}
+	}
+
+	const content = await fs.readFile(fullPath, 'utf-8');
+	const lines = content.split('\n');
+	let mtime = 0;
+	try {
+		const stat = await fs.stat(fullPath);
+		mtime = stat.mtimeMs;
+	} catch {
+		// ignore
+	}
+
+	fileCache.set(fullPath, {content, lines, mtime, cachedAt: now});
+	return {content, lines};
+}
+
+function getCachedOutline(fullPath: string): OutlineCacheEntry | null {
+	const cached = outlineCache.get(fullPath);
+	if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
+		return cached;
+	}
+	return null;
+}
+
 // ─── LINE-BY-LINE SYMBOL EXTRACTOR ───
 // Instead of multi-line regex, we scan each line for symbol definitions.
 // This handles indented code, arrow functions, export default, etc.
@@ -484,8 +546,18 @@ export async function getFileOutline(
 	filePath: string
 ): Promise<{symbols: FileSymbol[]; totalLines: number; formatted: string}> {
 	const fullPath = resolveFilePath(projectRoot, filePath);
-	const content = await fs.readFile(fullPath, 'utf-8');
-	const lines = content.split('\n');
+
+	// Check outline cache first
+	const cachedOutline = getCachedOutline(fullPath);
+	if (cachedOutline) {
+		return {
+			symbols: cachedOutline.symbols,
+			totalLines: cachedOutline.totalLines,
+			formatted: cachedOutline.formatted,
+		};
+	}
+
+	const {lines} = await getCachedFile(fullPath);
 	const totalLines = lines.length;
 
 	const rawSymbols = extractSymbolsForFile(lines, filePath);
@@ -513,6 +585,14 @@ export async function getFileOutline(
 		})
 		.join('\n');
 
+	// Cache the result
+	outlineCache.set(fullPath, {
+		symbols,
+		totalLines,
+		formatted,
+		cachedAt: Date.now(),
+	});
+
 	return {symbols, totalLines, formatted};
 }
 
@@ -529,8 +609,7 @@ export async function readFileLines(
 	endLine: number
 ): Promise<string> {
 	const fullPath = resolveFilePath(projectRoot, filePath);
-	const content = await fs.readFile(fullPath, 'utf-8');
-	const lines = content.split('\n');
+	const {lines} = await getCachedFile(fullPath);
 	const total = lines.length;
 
 	// Clamp values
@@ -618,8 +697,7 @@ export async function searchInFile(
 	maxMatches: number = 50
 ): Promise<string> {
 	const fullPath = resolveFilePath(projectRoot, filePath);
-	const content = await fs.readFile(fullPath, 'utf-8');
-	const lines = content.split('\n');
+	const {lines} = await getCachedFile(fullPath);
 	const total = lines.length;
 	const results: string[] = [];
 
@@ -721,55 +799,26 @@ export async function searchInProject(
 
 	const ctx = Math.max(0, Math.min(contextLines, 5));
 
-	async function scan(dir: string, depth = 0): Promise<void> {
-		if (depth > 10 || totalMatches >= max) return;
+	// Phase 1: Collect all candidate files
+	const candidateFiles: {fullPath: string; relativePath: string}[] = [];
+
+	async function collectFiles(dir: string, depth = 0): Promise<void> {
+		if (depth > 10) return;
 		try {
 			const entries = await fs.readdir(dir, {withFileTypes: true});
 			for (const entry of entries) {
-				if (totalMatches >= max) break;
 				const fullPath = path.join(dir, entry.name);
 				const relativePath = path.relative(projectRoot, fullPath);
 
 				if (ig.ignores(relativePath)) continue;
 
 				if (entry.isDirectory()) {
-					await scan(fullPath, depth + 1);
+					await collectFiles(fullPath, depth + 1);
 				} else if (entry.isFile()) {
 					if (fileGlob && !fileGlob.test(entry.name) && !fileGlob.test(relativePath))
 						continue;
 					if (isBinaryExtension(entry.name)) continue;
-
-					try {
-						const content = await fs.readFile(fullPath, 'utf-8');
-						const lines = content.split('\n');
-						filesSearched++;
-						let fileHasMatch = false;
-
-						for (let i = 0; i < lines.length && totalMatches < max; i++) {
-							if (regex.test(lines[i])) {
-								regex.lastIndex = 0;
-								totalMatches++;
-								if (!fileHasMatch) {
-									filesMatched++;
-									fileHasMatch = true;
-								}
-
-								if (ctx === 0) {
-									results.push(`${relativePath}:${i + 1}:${lines[i].trim()}`);
-								} else {
-									const start = Math.max(0, i - ctx);
-									const end = Math.min(lines.length - 1, i + ctx);
-									results.push(`${relativePath}:${i + 1}:`);
-									for (let j = start; j <= end; j++) {
-										const marker = j === i ? '>' : ' ';
-										results.push(`${marker}${j + 1}: ${lines[j]}`);
-									}
-								}
-							}
-						}
-					} catch {
-						// skip unreadable files
-					}
+					candidateFiles.push({fullPath, relativePath});
 				}
 			}
 		} catch {
@@ -777,7 +826,57 @@ export async function searchInProject(
 		}
 	}
 
-	await scan(projectRoot);
+	await collectFiles(projectRoot);
+
+	// Phase 2: Process files in parallel batches
+	const BATCH_SIZE = 10;
+	for (
+		let i = 0;
+		i < candidateFiles.length && totalMatches < max;
+		i += BATCH_SIZE
+	) {
+		const batch = candidateFiles.slice(i, i + BATCH_SIZE);
+		await Promise.all(
+			batch.map(async ({fullPath, relativePath}) => {
+				if (totalMatches >= max) return;
+				try {
+					const {lines} = await getCachedFile(fullPath);
+					filesSearched++;
+					let fileHasMatch = false;
+
+					// Create per-file regex to avoid shared lastIndex issues
+					const localRegex = new RegExp(regex.source, regex.flags);
+
+					for (let j = 0; j < lines.length && totalMatches < max; j++) {
+						if (localRegex.test(lines[j])) {
+							localRegex.lastIndex = 0;
+							totalMatches++;
+							if (!fileHasMatch) {
+								filesMatched++;
+								fileHasMatch = true;
+							}
+
+							if (ctx === 0) {
+								results.push(`${relativePath}:${j + 1}:${lines[j].trim()}`);
+							} else {
+								const start = Math.max(0, j - ctx);
+								const end = Math.min(lines.length - 1, j + ctx);
+								results.push(`${relativePath}:${j + 1}:`);
+								for (let k = start; k <= end; k++) {
+									const marker = k === j ? '>' : ' ';
+									results.push(`${marker}${k + 1}: ${lines[k]}`);
+								}
+							}
+						}
+					}
+				} catch {
+					// skip unreadable files
+				}
+			})
+		);
+	}
+
+	// Files already collected and processed above
 
 	if (totalMatches === 0) {
 		return `No matches for "${pattern}" in project (${filesSearched} files searched)`;
@@ -898,8 +997,7 @@ export async function readFile(
 	endLine?: number
 ): Promise<string> {
 	const fullPath = resolveFilePath(projectRoot, filePath);
-	const content = await fs.readFile(fullPath, 'utf-8');
-	const lines = content.split('\n');
+	const {lines} = await getCachedFile(fullPath);
 	const total = lines.length;
 	const relPath = path.relative(projectRoot, fullPath);
 
