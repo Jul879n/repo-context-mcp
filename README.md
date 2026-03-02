@@ -2,6 +2,10 @@
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. **Better than CLAUDE.md** because it's dynamic, accurate, and uses minimal tokens.
 
+## What's New in v1.6.0
+
+- **🩺 Smart Diagnostics (`get_diagnostics`)**: Runs project linters or typechecks and aggressively strips out noise (cSpell, style warnings) to save thousands of tokens. Returns only fatal errors.
+
 ## What's New in v1.5.3
 
 - **🧠 In-Memory File Cache**: 10s TTL — avoids redundant disk reads during multi-step workflows
@@ -109,6 +113,9 @@ list_files { "path": "src", "pattern": "*.ts" }     # Filtered
 annotate { "action": "list" }
 annotate { "action": "add", "category": "businessRules", "text": "..." }
 annotate { "action": "remove", "category": "gotchas", "index": 0 }
+
+# ─── Diagnostics (v1.6.0) ───
+get_diagnostics                                     # Runs linter/tsc and returns ONLY fatal errors (filters cspell/warnings)
 
 # ─── Docs ───
 generate_project_docs                               # Force regenerate .repo-context/

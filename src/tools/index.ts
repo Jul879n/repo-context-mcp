@@ -14,3 +14,4 @@ export {
 	readFile,
 	getAllOutlines,
 } from './file-reader.js';
+export {getDiagnostics} from './diagnostics.js';

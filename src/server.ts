@@ -22,6 +22,7 @@ import {
 	searchInProject,
 	listFiles,
 	readFile,
+	getDiagnostics,
 } from './tools/index.js';
 import {ProjectContext} from './types/index.js';
 import {startWatcher} from './watcher.js';
@@ -197,6 +198,16 @@ const tools: Tool[] = [
 	{
 		name: 'generate_project_docs',
 		description: 'Regenerate .repo-context/ docs. Usually automatic.',
+		inputSchema: {
+			type: 'object',
+			properties: {},
+			required: [],
+		},
+	},
+	{
+		name: 'get_diagnostics',
+		description:
+			'Run project diagnostics (lint/typecheck) and return ONLY fatal errors. Eliminates noise and saves tokens.',
 		inputSchema: {
 			type: 'object',
 			properties: {},
@@ -1456,6 +1467,24 @@ export function createServer(): Server {
 					);
 					return {
 						content: [{type: 'text', text: readResult}],
+					};
+				}
+
+				case 'get_diagnostics': {
+					const diagResult = await getDiagnostics(PROJECT_ROOT);
+					return {
+						content: [
+							{
+								type: 'text',
+								text: [
+									`[Diagnostics] Command run: ${diagResult.command}`,
+									`Fatal errors found: ${diagResult.errorCount}`,
+									`Noise lines filtered: ${diagResult.filteredLines} (tokens saved!)`,
+									`---`,
+									diagResult.output,
+								].join('\n'),
+							},
+						],
 					};
 				}
 
