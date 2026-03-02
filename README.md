@@ -2,6 +2,17 @@
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. **Better than CLAUDE.md** because it's dynamic, accurate, and uses minimal tokens.
 
+## What's New in v1.5.0
+
+- **📖 Smart File Reader**: 4 new tools for precise, token-efficient file reading
+- **`read_file_outline`**: See all functions/classes/interfaces with line ranges (~100 tokens)
+- **`read_file_lines`**: Read only specific line ranges (max 200 lines)
+- **`read_file_symbol`**: Read a specific function/class by name
+- **`search_in_file`**: Search with ±N lines of context
+- **📋 OUTLINES.md**: Auto-generated outlines for all source files (0 tokens)
+- **🎯 Antigravity optimized**: `file-reader-guide` prompt, dynamic outline resources
+- **18 Tools + 11 Resources + 3 Prompts**
+
 ## What's New in v1.4.0
 
 - **🧙 Interactive Setup Wizard**: `repo-context-setup` auto-configures your IDEs/AIs
@@ -12,13 +23,12 @@ Universal MCP server that analyzes any codebase and provides structured context 
 
 ## What's New in v1.3.0
 
-- **📝 Zero-Token Auto-Docs**: Auto-generates `.repo-context/` with 5 markdown files on startup
+- **📝 Zero-Token Auto-Docs**: Auto-generates `.repo-context/` with 6 markdown files on startup
 - **👁️ File Watcher**: Detects code changes and regenerates docs automatically (5s debounce)
 - **0 MCP tokens per session**: AI reads `.repo-context/*.md` naturally — no tool calls needed
 - **🔥 Hot Files Detection**: Auto-detects oversized files, high imports, TODO-dense code
 - **🔗 Import Graph**: Internal dependency map with hub files, orphans, and **mermaid diagrams**
 - **📋 Annotations**: Manage business rules, gotchas, and warnings via MCP tools (CRUD)
-- **14 Tools + 10 Resources**: Up from 7+7 in v1.1.0
 
 ## Quick Setup
 
@@ -89,6 +99,12 @@ get_project_imports { "format": "mermaid" }       # Dependency graph (visual)
 get_project_annotations                           # Business rules & gotchas
 generate_project_docs                             # Force regenerate .repo-context/
 
+# v1.5.0 — Smart File Reader (token-efficient)
+read_file_outline { "file": "src/server.ts" }     # Outline: symbols + line ranges
+read_file_lines { "file": "src/server.ts", "start_line": 100, "end_line": 150 }
+read_file_symbol { "file": "src/server.ts", "symbol": "createServer" }
+search_in_file { "file": "src/server.ts", "pattern": "TODO" }
+
 # v1.2.0 — Annotation management
 add_annotation { "category": "businessRules", "text": "..." }
 add_annotation { "category": "gotchas", "text": "..." }
@@ -104,18 +120,19 @@ refresh_project_context
 
 MCP Resources are automatically available to AI - no tool call needed:
 
-| Resource                     | Description               |
-| ---------------------------- | ------------------------- |
-| `repo://context/summary`     | ~50 token summary         |
-| `repo://context/full`        | Complete compact context  |
-| `repo://context/stack`       | Languages & frameworks    |
-| `repo://context/structure`   | Folders & entry points    |
-| `repo://context/api`         | API endpoints             |
-| `repo://context/models`      | Data models               |
-| `repo://context/hotfiles`    | Complex/oversized files   |
-| `repo://context/annotations` | Business rules & gotchas  |
-| `repo://context/imports`     | Internal dependency graph |
-| `repo://context.json`        | Full JSON (programmatic)  |
+| Resource                     | Description                         |
+| ---------------------------- | ----------------------------------- |
+| `repo://context/summary`     | ~50 token summary                   |
+| `repo://context/full`        | Complete compact context            |
+| `repo://context/stack`       | Languages & frameworks              |
+| `repo://context/structure`   | Folders & entry points              |
+| `repo://context/api`         | API endpoints                       |
+| `repo://context/models`      | Data models                         |
+| `repo://context/hotfiles`    | Complex/oversized files             |
+| `repo://context/annotations` | Business rules & gotchas            |
+| `repo://context/imports`     | Internal dependency graph           |
+| `repo://context/outlines`    | All file outlines (symbols + lines) |
+| `repo://context.json`        | Full JSON (programmatic)            |
 
 ## Output Formats
 
@@ -186,6 +203,7 @@ your-project/
 │   ├── COMPONENTS.md       ← Folders, entry points, hot files, endpoints
 │   ├── MODELS.md           ← All data models with fields
 │   ├── IMPORTS.md          ← Hub files, orphans, mermaid diagram
+│   ├── OUTLINES.md         ← All symbols with line ranges (v1.5.0)
 │   └── STATUS.md           ← TODOs, CI/CD, Docker, annotations
 ```
 

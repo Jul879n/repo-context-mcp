@@ -11,7 +11,15 @@ import {
 	Resource,
 	Prompt,
 } from '@modelcontextprotocol/sdk/types.js';
-import {getFullContext, refreshContext, generateDocs} from './tools/index.js';
+import {
+	getFullContext,
+	refreshContext,
+	generateDocs,
+	getFileOutline,
+	readFileLines,
+	readFileSymbol,
+	searchInFile,
+} from './tools/index.js';
 import {ProjectContext} from './types/index.js';
 import {startWatcher} from './watcher.js';
 import {
@@ -207,6 +215,87 @@ This replaces the need to explore the codebase manually.`,
 			required: [],
 		},
 	},
+	// ─── Smart File Reader Tools (v1.5.0) ───
+	{
+		name: 'read_file_outline',
+		description:
+			'Returns outline of a file: all functions, classes, interfaces, types with line ranges. Use BEFORE reading a large file to know what to target. ~100 tokens.',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				file: {
+					type: 'string',
+					description: 'Relative path to file (e.g. src/server.ts)',
+				},
+			},
+			required: ['file'],
+		},
+	},
+	{
+		name: 'read_file_lines',
+		description:
+			'Reads specific line range from a file. Max 200 lines per call. Use after read_file_outline to read only what you need.',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				file: {
+					type: 'string',
+					description: 'Relative path to file',
+				},
+				start_line: {
+					type: 'number',
+					description: 'Start line (1-indexed)',
+				},
+				end_line: {
+					type: 'number',
+					description: 'End line (1-indexed, max 200 lines from start)',
+				},
+			},
+			required: ['file', 'start_line', 'end_line'],
+		},
+	},
+	{
+		name: 'read_file_symbol',
+		description:
+			'Reads a specific function, class, or interface by name. Returns complete code block. Use after read_file_outline to get symbol names.',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				file: {
+					type: 'string',
+					description: 'Relative path to file',
+				},
+				symbol: {
+					type: 'string',
+					description: 'Symbol name (function, class, interface, type)',
+				},
+			},
+			required: ['file', 'symbol'],
+		},
+	},
+	{
+		name: 'search_in_file',
+		description:
+			'Search for a pattern in a file. Returns matches with ±N lines of context. Max 10 matches.',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				file: {
+					type: 'string',
+					description: 'Relative path to file',
+				},
+				pattern: {
+					type: 'string',
+					description: 'Search pattern (string or regex)',
+				},
+				context_lines: {
+					type: 'number',
+					description: 'Lines of context around each match (default: 3, max: 10)',
+				},
+			},
+			required: ['file', 'pattern'],
+		},
+	},
 ];
 
 // Define MCP Prompts - These inject context WITHOUT tool calls!
@@ -227,6 +316,11 @@ function getPrompts(): Prompt[] {
 		{
 			name: 'project-summary',
 			description: 'Ultra-minimal project summary (~50 tokens)',
+		},
+		{
+			name: 'file-reader-guide',
+			description:
+				'Injects instructions for efficient file reading. Use for large files.',
 		},
 	];
 }
@@ -295,6 +389,13 @@ function getResources(): Resource[] {
 			name: 'Project Context (JSON)',
 			description: 'Full context in JSON format for programmatic use.',
 			mimeType: 'application/json',
+		},
+		{
+			uri: 'repo://context/outlines',
+			name: 'File Outlines',
+			description:
+				'All source file outlines: functions, classes, interfaces with line ranges. Use to navigate large files.',
+			mimeType: 'text/plain',
 		},
 	];
 }
@@ -519,7 +620,7 @@ export function createServer(): Server {
 	const server = new Server(
 		{
 			name: 'repo-context-mcp',
-			version: '1.4.0',
+			version: '1.5.0',
 		},
 		{
 			capabilities: {
@@ -572,6 +673,36 @@ export function createServer(): Server {
 							content: {
 								type: 'text',
 								text: `Project: ${formatMinimal(context)}`,
+							},
+						},
+					],
+				};
+			}
+
+			if (name === 'file-reader-guide') {
+				const hotList =
+					context.hotFiles?.files
+						.map((f) => `- ${f.file} (${f.lines}L)`)
+						.join('\n') || 'None detected';
+				return {
+					messages: [
+						{
+							role: 'user',
+							content: {
+								type: 'text',
+								text: [
+									'# Smart File Reading Guide',
+									'For large files, ALWAYS use this workflow to minimize tokens:',
+									'1. read_file_outline → see all symbols with line ranges (~100 tokens)',
+									'2. read_file_symbol → read specific function/class by name',
+									'3. read_file_lines → read specific line range (max 200 lines)',
+									'4. search_in_file → find pattern with context',
+									'',
+									'NEVER read a full file >200 lines without checking outline first.',
+									'',
+									'## Hot Files (large/complex — use smart reading):',
+									hotList,
+								].join('\n'),
 							},
 						},
 					],
@@ -708,7 +839,38 @@ export function createServer(): Server {
 					content = JSON.stringify(context, null, 2);
 					mimeType = 'application/json';
 					break;
-				default:
+				case 'repo://context/outlines': {
+					const {getAllOutlines} = await import('./tools/file-reader.js');
+					const allOutlines = await getAllOutlines(PROJECT_ROOT);
+					const outlineLines: string[] = [];
+					for (const [file, data] of [...allOutlines.entries()].sort((a, b) =>
+						a[0].localeCompare(b[0])
+					)) {
+						outlineLines.push(`## ${file} (${data.totalLines}L)`);
+						for (const sym of data.symbols) {
+							const exp = sym.exported ? '⬆' : ' ';
+							outlineLines.push(
+								`${exp}${sym.type}:${sym.name} L${sym.startLine}-${sym.endLine}`
+							);
+						}
+					}
+					content =
+						outlineLines.length > 0
+							? outlineLines.join('\n')
+							: 'No source files detected';
+					break;
+				}
+				default: {
+					// Handle dynamic file outline: repo://file/outline?path=<relative_path>
+					if (uri.startsWith('repo://file/outline')) {
+						const url = new URL(uri.replace('repo://', 'http://'));
+						const filePath = url.searchParams.get('path');
+						if (filePath) {
+							const outline = await getFileOutline(PROJECT_ROOT, filePath);
+							content = `[${filePath}] ${outline.totalLines}L, ${outline.symbols.length} symbols\n${outline.formatted}`;
+							break;
+						}
+					}
 					return {
 						contents: [
 							{
@@ -718,6 +880,7 @@ export function createServer(): Server {
 							},
 						],
 					};
+				}
 			}
 
 			return {
@@ -1050,6 +1213,96 @@ export function createServer(): Server {
 						content: [
 							{type: 'text', text: 'Auto-docs regenerated in .repo-context/'},
 						],
+					};
+				}
+
+				// ─── Smart File Reader Tools (v1.5.0) ───
+
+				case 'read_file_outline': {
+					const outlineArgs = args as {file: string};
+					if (!outlineArgs?.file) {
+						return {
+							content: [{type: 'text', text: 'Error: file is required.'}],
+							isError: true,
+						};
+					}
+					const outline = await getFileOutline(PROJECT_ROOT, outlineArgs.file);
+					return {
+						content: [
+							{
+								type: 'text',
+								text: `[${outlineArgs.file}] ${outline.totalLines} lines, ${outline.symbols.length} symbols\n${outline.formatted}`,
+							},
+						],
+					};
+				}
+
+				case 'read_file_lines': {
+					const linesArgs = args as {
+						file: string;
+						start_line: number;
+						end_line: number;
+					};
+					if (!linesArgs?.file || !linesArgs.start_line || !linesArgs.end_line) {
+						return {
+							content: [
+								{
+									type: 'text',
+									text: 'Error: file, start_line and end_line are required.',
+								},
+							],
+							isError: true,
+						};
+					}
+					const linesContent = await readFileLines(
+						PROJECT_ROOT,
+						linesArgs.file,
+						linesArgs.start_line,
+						linesArgs.end_line
+					);
+					return {
+						content: [{type: 'text', text: linesContent}],
+					};
+				}
+
+				case 'read_file_symbol': {
+					const symArgs = args as {file: string; symbol: string};
+					if (!symArgs?.file || !symArgs?.symbol) {
+						return {
+							content: [{type: 'text', text: 'Error: file and symbol are required.'}],
+							isError: true,
+						};
+					}
+					const symbolContent = await readFileSymbol(
+						PROJECT_ROOT,
+						symArgs.file,
+						symArgs.symbol
+					);
+					return {
+						content: [{type: 'text', text: symbolContent}],
+					};
+				}
+
+				case 'search_in_file': {
+					const searchArgs = args as {
+						file: string;
+						pattern: string;
+						context_lines?: number;
+					};
+					if (!searchArgs?.file || !searchArgs?.pattern) {
+						return {
+							content: [{type: 'text', text: 'Error: file and pattern are required.'}],
+							isError: true,
+						};
+					}
+					const searchResult = await searchInFile(
+						PROJECT_ROOT,
+						searchArgs.file,
+						searchArgs.pattern,
+						searchArgs.context_lines
+					);
+					return {
+						content: [{type: 'text', text: searchResult}],
 					};
 				}
 

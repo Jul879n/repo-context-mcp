@@ -208,6 +208,24 @@ export interface Annotations {
 	warnings: string[];
 }
 
+// File symbols — extracted from source files for smart reading
+export interface FileSymbol {
+	name: string;
+	type:
+		| 'function'
+		| 'class'
+		| 'interface'
+		| 'type'
+		| 'const'
+		| 'enum'
+		| 'method'
+		| 'export';
+	startLine: number;
+	endLine: number;
+	signature: string;
+	exported: boolean;
+}
+
 // Cache structure
 export interface CacheData {
 	version: string;

@@ -4,3 +4,10 @@ export {
 	analyzeProject,
 } from './getFullContext.js';
 export {generateDocs} from './docs-generator.js';
+export {
+	getFileOutline,
+	readFileLines,
+	readFileSymbol,
+	searchInFile,
+	getAllOutlines,
+} from './file-reader.js';
