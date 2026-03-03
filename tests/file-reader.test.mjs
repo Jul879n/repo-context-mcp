@@ -82,6 +82,35 @@ async function setupTempFiles() {
 			'}',
 		].join('\n')
 	);
+
+	// ── Fixtures for searchInProject "better than CLI grep" tests ──
+	// Reproduces the exact failure mode: one "hot" file with many matches
+	// caused sparse files to be silently skipped in the old implementation.
+	const SEARCH_DIR = path.join(TEMP_DIR, 'search-coverage');
+	await fs.mkdir(SEARCH_DIR, {recursive: true});
+
+	// hot-file: 20 occurrences of TARGET — used to exhaust the old match budget
+	const hotLines = [];
+	for (let i = 1; i <= 20; i++) {
+		hotLines.push(`const TARGET_${i} = "value_${i}"; // TARGET occurrence`);
+	}
+	await fs.writeFile(path.join(SEARCH_DIR, 'hot-file.ts'), hotLines.join('\n'));
+
+	// 6 sparse files — each has exactly 1 match; old code skipped these
+	for (const letter of ['a', 'b', 'c', 'd', 'e', 'f']) {
+		await fs.writeFile(
+			path.join(SEARCH_DIR, `sparse-${letter}.ts`),
+			`export const UNIQUE_${letter.toUpperCase()} = "data";\n// TARGET found here\nexport function fn${letter}() {}\n`
+		);
+	}
+
+	// Ignored directory — must never appear in results
+	const ignoredDir = path.join(SEARCH_DIR, 'node_modules', 'pkg');
+	await fs.mkdir(ignoredDir, {recursive: true});
+	await fs.writeFile(
+		path.join(ignoredDir, 'index.ts'),
+		'// TARGET should be ignored\n'
+	);
 }
 
 async function cleanupTempFiles() {
@@ -253,30 +282,150 @@ describe('file-reader tools v1.6.0', async () => {
 		});
 	});
 
-	// ─── searchInProject (new) ───
+	// ─── searchInProject ───
 
 	describe('searchInProject', () => {
-		it('should search across multiple files', async () => {
+		const SEARCH_DIR = path.join(TEMP_DIR, 'search-coverage');
+
+		// ── Basic correctness ──
+
+		it('should find matches across multiple files', async () => {
 			const result = await searchInProject(PROJECT_ROOT, 'MAGIC_PATTERN');
-			assert.ok(result.includes('matches'));
-			assert.ok(result.includes('nested.ts'));
+			assert.ok(result.includes('matches'), 'Should report matches');
+			assert.ok(result.includes('nested.ts'), 'Should find nested.ts');
 		});
 
-		it('should respect max_results', async () => {
-			const result = await searchInProject(PROJECT_ROOT, 'function', undefined, 3);
-			assert.ok(result.includes('3 matches'));
-		});
-
-		it('should use compact output format', async () => {
+		it('should return no-match message when nothing found', async () => {
 			const result = await searchInProject(
-				PROJECT_ROOT,
-				'greet',
-				undefined,
-				10,
+				SEARCH_DIR,
+				'ZZZNOMATCH_XYZ_9999'
+			);
+			assert.ok(result.includes('No matches'), `Got: ${result}`);
+		});
+
+		it('should support regex patterns', async () => {
+			const result = await searchInProject(SEARCH_DIR, 'TARGET_1[0-9]');
+			assert.ok(result.includes('hot-file.ts'), 'Should find regex matches');
+		});
+
+		it('should filter by file_pattern glob', async () => {
+			const result = await searchInProject(
+				SEARCH_DIR,
+				'TARGET',
+				'sparse-*.ts'
+			);
+			assert.ok(!result.includes('hot-file.ts'), 'hot-file.ts should be excluded');
+			assert.ok(result.includes('sparse-'), 'Sparse files should be found');
+		});
+
+		// ── Output format ──
+
+		it('should start with a summary line listing all matching files', async () => {
+			const result = await searchInProject(SEARCH_DIR, 'TARGET');
+			const firstLine = result.split('\n')[0];
+			assert.match(
+				firstLine,
+				/\d+ matches in \d+ files/,
+				`First line should be summary, got: "${firstLine}"`
+			);
+		});
+
+		it('should list each matching file in the header section', async () => {
+			const result = await searchInProject(SEARCH_DIR, 'TARGET');
+			// Header lines are indented with two spaces
+			const headerLines = result
+				.split('\n')
+				.filter((l) => l.startsWith('  ') && l.includes('.ts'));
+			assert.ok(
+				headerLines.length >= 7,
+				`Expected >=7 files in header, got ${headerLines.length}: ${headerLines.join(', ')}`
+			);
+		});
+
+		// ── Complete coverage: the core "better than CLI grep" guarantee ──
+
+		it('never misses a file — all 7 matching files listed even with max_results=2', async () => {
+			// Old bug: hot-file.ts had 20 matches, exhausting a budget of 10.
+			// Files sparse-a..f (1 match each) were silently skipped.
+			// New behavior: all files always appear in the header regardless of max_results.
+			const result = await searchInProject(SEARCH_DIR, 'TARGET', undefined, 2);
+
+			assert.ok(result.includes('hot-file.ts'), 'hot-file.ts must be listed');
+			for (const letter of ['a', 'b', 'c', 'd', 'e', 'f']) {
+				assert.ok(
+					result.includes(`sparse-${letter}.ts`),
+					`sparse-${letter}.ts must be listed`
+				);
+			}
+		});
+
+		it('reports correct total file count in summary', async () => {
+			const result = await searchInProject(SEARCH_DIR, 'TARGET', undefined, 2);
+			const firstLine = result.split('\n')[0];
+			// 7 files: hot-file + 6 sparse (node_modules excluded)
+			assert.match(
+				firstLine,
+				/in 7 files/,
+				`Expected "in 7 files" in summary, got: "${firstLine}"`
+			);
+		});
+
+		it('excludes node_modules from results', async () => {
+			const result = await searchInProject(SEARCH_DIR, 'TARGET');
+			const lines = result.split('\n');
+			const nodeModulesLines = lines.filter((l) => l.includes('node_modules'));
+			assert.strictEqual(
+				nodeModulesLines.length,
+				0,
+				'node_modules should never appear in results'
+			);
+		});
+
+		// ── Per-file detail truncation ──
+
+		it('truncates detail when a file exceeds max_results matches', async () => {
+			// hot-file.ts has 20 matches; max_results=3 → show 3 + truncation note
+			const result = await searchInProject(SEARCH_DIR, 'TARGET', undefined, 3);
+			assert.ok(
+				result.includes('more matches not shown'),
+				`Should show truncation note. Got:\n${result}`
+			);
+		});
+
+		it('still shows all sparse files in detail even when hot-file is truncated', async () => {
+			const result = await searchInProject(SEARCH_DIR, 'TARGET', undefined, 3);
+			// Each sparse file has 1 match which is <= max_results=3, so all get full detail
+			for (const letter of ['a', 'b', 'c', 'd', 'e', 'f']) {
+				assert.ok(
+					result.includes(`sparse-${letter}.ts:`),
+					`sparse-${letter}.ts detail section should appear`
+				);
+			}
+		});
+
+		it('context_lines=0 produces compact line:content format', async () => {
+			const result = await searchInProject(
+				SEARCH_DIR,
+				'TARGET',
+				'hot-file.ts',
+				30,
 				0
 			);
-			// Format: file:line:content
-			assert.ok(result.includes(':'));
+			// With ctx=0, each match line is "  N: content" (no surrounding context)
+			const matchLines = result.split('\n').filter((l) => /^\s+\d+:/.test(l));
+			assert.ok(matchLines.length > 0, 'Should have compact match lines');
+		});
+
+		it('context_lines=2 includes surrounding lines', async () => {
+			const result = await searchInProject(
+				SEARCH_DIR,
+				'fn[abc]',
+				'sparse-a.ts',
+				30,
+				2
+			);
+			// With context, output should include lines before/after match
+			assert.ok(result.includes('>'), 'Should mark matched line with >');
 		});
 	});
 

@@ -170,13 +170,18 @@ const tools: Tool[] = [
 	},
 	{
 		name: 'search_in_project',
-		description: 'Search across all project files. Replaces grep.',
+		description:
+			'Search across all project files. Replaces grep. Always lists every file with matches — no file is ever silently skipped.',
 		inputSchema: {
 			type: 'object',
 			properties: {
 				pattern: {type: 'string', description: 'Pattern (string/regex)'},
 				file_pattern: {type: 'string', description: 'Glob filter (e.g. "*.tsx")'},
-				max_results: {type: 'number', description: 'Max results (default: 30)'},
+				max_results: {
+					type: 'number',
+					description:
+						'Max matches shown per file in detail (default: 30). All matching files are always listed regardless of this limit.',
+				},
 				context_lines: {type: 'number', description: 'Context lines (default: 1)'},
 			},
 			required: ['pattern'],

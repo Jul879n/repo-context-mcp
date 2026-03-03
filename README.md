@@ -2,6 +2,10 @@
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. **Better than CLAUDE.md** because it's dynamic, accurate, and uses minimal tokens.
 
+## What's New in v1.6.3
+
+- **🔍 Complete search coverage (`search_in_project`)**: Scans every file without early exit — no file is ever silently skipped. Output always lists all matching files in the header, even when per-file detail is truncated. `max_results` now controls matches shown per file in detail, not a global cap that caused hot files to crowd out others.
+
 ## What's New in v1.6.2
 
 - **🔧 Fix VS Code MCP configuration**: Now correctly writes to `mcp.json` (instead of `settings.json`) with `"type": "stdio"` as required by VS Code's native MCP support.
@@ -18,7 +22,7 @@ Universal MCP server that analyzes any codebase and provides structured context 
 
 - **🧠 In-Memory File Cache**: 10s TTL — avoids redundant disk reads during multi-step workflows
 - **📦 Outline Cache**: Parsed outlines cached separately — `read_file` → `read_file_symbol` uses 1 read instead of 3
-- **⚡ Parallel Search**: `search_in_project` processes files in batches of 10 via `Promise.all`
+- **⚡ Parallel Search**: `search_in_project` processes files in batches via `Promise.all`
 - **🔒 Thread-safe Regex**: Per-file regex instances in parallel search to avoid `lastIndex` conflicts
 
 ## What's New in v1.5.2
@@ -124,8 +128,9 @@ read_file_symbol { "file": "src/server.ts", "symbol": "createServer" }     # Fuz
 
 # ─── Search (v1.5.2) ───
 search_in_file { "file": "src/server.ts", "pattern": "TODO" }             # In-file
-search_in_project { "pattern": "handleRoute" }                            # Cross-file grep
+search_in_project { "pattern": "handleRoute" }                            # Cross-file grep — always lists ALL matching files
 search_in_project { "pattern": "export", "file_pattern": "*.tsx" }        # With glob filter
+search_in_project { "pattern": "TODO", "max_results": 5 }                 # max_results = matches shown per file in detail
 
 # ─── File Listing (v1.5.2) ───
 list_files                                          # Project root

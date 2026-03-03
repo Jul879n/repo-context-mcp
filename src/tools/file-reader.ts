@@ -759,11 +759,8 @@ export async function searchInProject(
 	maxResults: number = 30,
 	contextLines: number = 1
 ): Promise<string> {
-	const results: string[] = [];
-	let totalMatches = 0;
-	let filesSearched = 0;
-	let filesMatched = 0;
-	const max = Math.max(1, Math.min(maxResults, 100));
+	// max_results = max matches shown in detail per file (all files always listed)
+	const maxDetailPerFile = Math.max(1, Math.min(maxResults, 100));
 
 	let regex: RegExp;
 	try {
@@ -794,12 +791,10 @@ export async function searchInProject(
 		'.repo-context',
 	]);
 
-	// File pattern matching
 	const fileGlob = filePattern ? globToRegex(filePattern) : null;
-
 	const ctx = Math.max(0, Math.min(contextLines, 5));
 
-	// Phase 1: Collect all candidate files
+	// Phase 1: Collect candidate files
 	const candidateFiles: {fullPath: string; relativePath: string}[] = [];
 
 	async function collectFiles(dir: string, depth = 0): Promise<void> {
@@ -828,64 +823,97 @@ export async function searchInProject(
 
 	await collectFiles(projectRoot);
 
-	// Phase 2: Process files in parallel batches
-	const BATCH_SIZE = 10;
-	for (
-		let i = 0;
-		i < candidateFiles.length && totalMatches < max;
-		i += BATCH_SIZE
-	) {
+	// Phase 2: Scan ALL files — no early exit, complete coverage
+	interface FileResult {
+		relativePath: string;
+		fullPath: string;
+		matchLineIndices: number[];
+	}
+
+	const fileResults: FileResult[] = [];
+
+	const BATCH_SIZE = 20;
+	for (let i = 0; i < candidateFiles.length; i += BATCH_SIZE) {
 		const batch = candidateFiles.slice(i, i + BATCH_SIZE);
-		await Promise.all(
+		const batchResults = await Promise.all(
 			batch.map(async ({fullPath, relativePath}) => {
-				if (totalMatches >= max) return;
 				try {
 					const {lines} = await getCachedFile(fullPath);
-					filesSearched++;
-					let fileHasMatch = false;
-
-					// Create per-file regex to avoid shared lastIndex issues
 					const localRegex = new RegExp(regex.source, regex.flags);
-
-					for (let j = 0; j < lines.length && totalMatches < max; j++) {
+					const matchLineIndices: number[] = [];
+					for (let j = 0; j < lines.length; j++) {
 						if (localRegex.test(lines[j])) {
 							localRegex.lastIndex = 0;
-							totalMatches++;
-							if (!fileHasMatch) {
-								filesMatched++;
-								fileHasMatch = true;
-							}
-
-							if (ctx === 0) {
-								results.push(`${relativePath}:${j + 1}:${lines[j].trim()}`);
-							} else {
-								const start = Math.max(0, j - ctx);
-								const end = Math.min(lines.length - 1, j + ctx);
-								results.push(`${relativePath}:${j + 1}:`);
-								for (let k = start; k <= end; k++) {
-									const marker = k === j ? '>' : ' ';
-									results.push(`${marker}${k + 1}: ${lines[k]}`);
-								}
-							}
+							matchLineIndices.push(j);
 						}
+					}
+					if (matchLineIndices.length > 0) {
+						return {relativePath, fullPath, matchLineIndices} satisfies FileResult;
 					}
 				} catch {
 					// skip unreadable files
 				}
+				return null;
 			})
+		);
+		for (const r of batchResults) {
+			if (r) fileResults.push(r);
+		}
+	}
+
+	if (fileResults.length === 0) {
+		return `No matches for "${pattern}" in project (${candidateFiles.length} files searched)`;
+	}
+
+	fileResults.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+
+	const totalFiles = fileResults.length;
+	const totalMatches = fileResults.reduce((sum, f) => sum + f.matchLineIndices.length, 0);
+
+	// Phase 3: Build output
+	// Header: always list ALL matching files so no file is ever missed
+	const output: string[] = [];
+	output.push(`${totalMatches} matches in ${totalFiles} files:`);
+	for (const {relativePath, matchLineIndices} of fileResults) {
+		output.push(`  ${relativePath} (${matchLineIndices.length})`);
+	}
+	output.push('');
+
+	// Detail section: bounded per file by maxDetailPerFile
+	let detailedFileCount = 0;
+	for (const {relativePath, fullPath, matchLineIndices} of fileResults) {
+		const {lines: fileLines} = await getCachedFile(fullPath);
+		const showCount = Math.min(matchLineIndices.length, maxDetailPerFile);
+
+		output.push(`${relativePath}:`);
+		for (let m = 0; m < showCount; m++) {
+			const lineIdx = matchLineIndices[m];
+			if (ctx === 0) {
+				output.push(`  ${lineIdx + 1}: ${fileLines[lineIdx].trim()}`);
+			} else {
+				const start = Math.max(0, lineIdx - ctx);
+				const end = Math.min(fileLines.length - 1, lineIdx + ctx);
+				for (let k = start; k <= end; k++) {
+					const marker = k === lineIdx ? '>' : ' ';
+					output.push(`  ${marker}${k + 1}: ${fileLines[k]}`);
+				}
+			}
+		}
+		if (matchLineIndices.length > showCount) {
+			output.push(
+				`  ... (${matchLineIndices.length - showCount} more matches not shown)`
+			);
+		}
+		detailedFileCount++;
+	}
+
+	if (detailedFileCount < totalFiles) {
+		output.push(
+			`\n(${totalFiles - detailedFileCount} files not detailed above — all files listed in header)`
 		);
 	}
 
-	// Files already collected and processed above
-
-	if (totalMatches === 0) {
-		return `No matches for "${pattern}" in project (${filesSearched} files searched)`;
-	}
-
-	const truncated = totalMatches >= max ? ` (truncated at ${max})` : '';
-	return `${totalMatches} matches in ${filesMatched} files${truncated}\n${results.join(
-		'\n'
-	)}`;
+	return output.join('\n');
 }
 
 // ─── LIST FILES ───
