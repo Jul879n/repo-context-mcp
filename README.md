@@ -2,6 +2,12 @@
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. **Better than CLAUDE.md** because it's dynamic, accurate, and uses minimal tokens.
 
+## What's New in v1.6.7
+
+- **🔎 `read_file_symbol` soporta `const` variables**: Ahora detecta `export const TIMEOUT = 5000`, `export const CONFIG = {...}`, `export const ROUTES = [...]` con tipo `[const]`. Antes solo encontraba funciones, clases e interfaces.
+- **📍 Paths relativos en search summary**: Cuando varios archivos comparten el mismo nombre (ej. múltiples `index.ts`), el resumen inline muestra el path relativo (`src/types/index.ts`) en lugar del basename ambiguo.
+- **🐛 Fix endLine para const con brackets**: `findConstEnd` rastrea `{`, `[` y `(` en lugar de solo `{`, evitando que el rango de una constante se "filtre" hasta la siguiente función del archivo.
+
 ## What's New in v1.6.6
 
 - **🔍 `max_files=-1` — grep replacement**: Use `file_pattern` + `max_files=-1` to get ALL matching files, grouped by file and sorted by match count. Respects `.gitignore`, skips binaries. 1.8x cheaper than native grep (no absolute-path overhead, grouped output). Hard token budget of ~4000t to prevent runaway output in large projects.

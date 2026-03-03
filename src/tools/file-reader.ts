@@ -211,10 +211,24 @@ function extractTsJsSymbols(lines: string[]): FileSymbol[] {
 			}
 		}
 
-		// 10. export default (no named function — just skip, not useful)
+		// 10. Plain const/let/var variable: export const NAME = value (non-function)
+		//     Catches: const TIMEOUT = 5000, const CONFIG = {...}, const ROUTES = [...]
+		//     Does NOT catch destructuring (const { a } = ...) — regex requires simple identifier
+		if (!sym) {
+			m = trimmed.match(
+				/^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$]\w*)\s*(?::\s*[^=]+)?\s*=/
+			);
+			if (m && !SKIP_NAMES.has(m[1])) {
+				sym = {name: m[1], type: 'const'};
+			}
+		}
+
+		// 11. export default (no named function — just skip, not useful)
 
 		if (sym) {
-			const endLine = findBlockEnd(lines, i, '.ts');
+			// const variables: track all bracket types ({,[,() to avoid leaking into next function
+			const endLine =
+				sym.type === 'const' ? findConstEnd(lines, i) : findBlockEnd(lines, i, '.ts');
 			let signature = trimmed;
 			if (signature.length > 120) signature = signature.substring(0, 117) + '...';
 
@@ -885,9 +899,19 @@ export async function searchInProject(
 	// Phase 3: Build output
 	// Always 1 line: counts + top files inline (hottest first)
 	const INLINE_LIMIT = 10;
-	const inlineStr = fileResults
-		.slice(0, INLINE_LIMIT)
-		.map(f => `${path.basename(f.relativePath)}(${f.matchLineIndices.length})`)
+	const top10 = fileResults.slice(0, INLINE_LIMIT);
+	// Show relative path when multiple files share the same basename (e.g. index.ts)
+	const basenameCount = new Map<string, number>();
+	for (const f of top10) {
+		const b = path.basename(f.relativePath);
+		basenameCount.set(b, (basenameCount.get(b) ?? 0) + 1);
+	}
+	const inlineStr = top10
+		.map(f => {
+			const basename = path.basename(f.relativePath);
+			const label = (basenameCount.get(basename) ?? 0) > 1 ? f.relativePath : basename;
+			return `${label}(${f.matchLineIndices.length})`;
+		})
 		.join(', ');
 	const moreStr = totalFiles > INLINE_LIMIT ? ` +${totalFiles - INLINE_LIMIT}` : '';
 	const summaryLine = `${totalMatches} matches in ${totalFiles} files: ${inlineStr}${moreStr}`;
@@ -1187,6 +1211,25 @@ function formatSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes}B`;
 	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}K`;
 	return `${(bytes / (1024 * 1024)).toFixed(1)}M`;
+}
+
+/**
+ * Find the end of a const/let/var statement by tracking ALL bracket types
+ * ({}, [], ()) and stopping when depth reaches 0 and a semicolon is found.
+ * Prevents const symbols from "leaking" into subsequent function bodies.
+ */
+function findConstEnd(lines: string[], startIndex: number): number {
+	let depth = 0;
+	for (let i = startIndex; i < Math.min(startIndex + 100, lines.length); i++) {
+		for (const ch of lines[i]) {
+			if (ch === '{' || ch === '[' || ch === '(') depth++;
+			else if (ch === '}' || ch === ']' || ch === ')') depth--;
+		}
+		if (lines[i].includes(';') && depth <= 0) {
+			return i + 1;
+		}
+	}
+	return startIndex + 1;
 }
 
 /**

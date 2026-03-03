@@ -83,6 +83,35 @@ async function setupTempFiles() {
 		].join('\n')
 	);
 
+	// Fixture for const-variable symbol extraction tests
+	await fs.writeFile(
+		path.join(TEMP_DIR, 'consts.ts'),
+		[
+			'export const TIMEOUT = 5000;',
+			'',
+			'export const CONFIG = {',
+			'  host: "localhost",',
+			'  port: 3000,',
+			'};',
+			'',
+			'export const ROUTES = ["/home", "/about"];',
+			'',
+			'const _internal = "private";',
+		].join('\n')
+	);
+
+	// Fixtures for duplicate-basename inline summary test
+	await fs.mkdir(path.join(TEMP_DIR, 'dup', 'a'), {recursive: true});
+	await fs.mkdir(path.join(TEMP_DIR, 'dup', 'b'), {recursive: true});
+	await fs.writeFile(
+		path.join(TEMP_DIR, 'dup', 'a', 'index.ts'),
+		'export const DUP_MARKER = "in-a";\n'
+	);
+	await fs.writeFile(
+		path.join(TEMP_DIR, 'dup', 'b', 'index.ts'),
+		'export const DUP_MARKER = "in-b";\n'
+	);
+
 	// ── Fixtures for searchInProject "better than CLI grep" tests ──
 	// Reproduces the exact failure mode: one "hot" file with many matches
 	// caused sparse files to be silently skipped in the old implementation.
@@ -221,6 +250,35 @@ describe('file-reader tools v1.6.0', async () => {
 			);
 			assert.ok(result.includes('not found'));
 			assert.ok(result.includes('Similar:'));
+		});
+
+		it('should find plain const variable (primitive)', async () => {
+			const result = await readFileSymbol(
+				PROJECT_ROOT,
+				'tests/_temp/consts.ts',
+				'TIMEOUT'
+			);
+			assert.ok(result.includes('[const]'), `Expected [const] type, got: ${result}`);
+			assert.ok(result.includes('5000'), `Expected value 5000, got: ${result}`);
+		});
+
+		it('should find plain const variable (object)', async () => {
+			const result = await readFileSymbol(
+				PROJECT_ROOT,
+				'tests/_temp/consts.ts',
+				'CONFIG'
+			);
+			assert.ok(result.includes('[const]'), `Expected [const] type, got: ${result}`);
+			assert.ok(result.includes('localhost'), `Expected object body, got: ${result}`);
+		});
+
+		it('should find plain const variable (array)', async () => {
+			const result = await readFileSymbol(
+				PROJECT_ROOT,
+				'tests/_temp/consts.ts',
+				'ROUTES'
+			);
+			assert.ok(result.includes('[const]'), `Expected [const] type, got: ${result}`);
 		});
 	});
 
@@ -416,6 +474,17 @@ describe('file-reader tools v1.6.0', async () => {
 			// With ctx=0, each match line is "  N: content" (no surrounding context)
 			const matchLines = result.split('\n').filter((l) => /^\s+\d+:/.test(l));
 			assert.ok(matchLines.length > 0, 'Should have compact match lines');
+		});
+
+		it('shows relative path in summary when multiple files share same basename', async () => {
+			const DUP_DIR = path.join(TEMP_DIR, 'dup');
+			const result = await searchInProject(DUP_DIR, 'DUP_MARKER');
+			const firstLine = result.split('\n')[0];
+			// Both files are named index.ts — summary must disambiguate with relative paths
+			assert.ok(
+				firstLine.includes('a/index.ts') || firstLine.includes('b/index.ts'),
+				`Expected relative paths in summary (e.g. a/index.ts), got: "${firstLine}"`
+			);
 		});
 
 		it('context_lines=2 includes surrounding lines', async () => {
