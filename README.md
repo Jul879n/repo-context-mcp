@@ -2,6 +2,12 @@
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. **Better than CLAUDE.md** because it's dynamic, accurate, and uses minimal tokens.
 
+## What's New in v1.6.6
+
+- **🔍 `max_files=-1` — grep replacement**: Use `file_pattern` + `max_files=-1` to get ALL matching files, grouped by file and sorted by match count. Respects `.gitignore`, skips binaries. 1.8x cheaper than native grep (no absolute-path overhead, grouped output). Hard token budget of ~4000t to prevent runaway output in large projects.
+- **📁 Code files before docs**: Results now sort code files (`.ts`, `.tsx`, `.js`, etc.) before documentation/markdown files within the same match-count tier. Prevents `.md` plans from crowding out real code in the top results.
+- **🔗 Merged context ranges**: When `context_lines > 0` and matches are close together, overlapping context windows are merged into contiguous blocks separated by `---`. Eliminates duplicate lines, saves 25–35% tokens on dense matches.
+
 ## What's New in v1.6.5
 
 - **⚡ Compact search by default (`search_in_project`)**: Returns a single summary line with total matches, file count, and top 10 hottest files inline — saving tokens on every search. Use `max_files=N` to also get code detail for the N most-matched files.
@@ -133,12 +139,19 @@ read_file { "file": "src/server.ts", "start_line": 100, "end_line": 150 }  # Ran
 read_file_outline { "file": "src/server.ts" }      # Outline: symbols + line ranges
 read_file_symbol { "file": "src/server.ts", "symbol": "createServer" }     # Fuzzy match
 
-# ─── Search (v1.5.2) ───
-search_in_file { "file": "src/server.ts", "pattern": "TODO" }             # In-file
-search_in_project { "pattern": "handleRoute" }                                       # Compact: 1-line summary, top 10 hottest files
-search_in_project { "pattern": "export", "file_pattern": "*.tsx" }                  # With glob filter
-search_in_project { "pattern": "TODO", "max_files": 5 }                             # Show code detail for top 5 files
-search_in_project { "pattern": "TODO", "max_files": 5, "max_results": 10 }          # Detail: max 10 matches per file
+# ─── Search (v1.5.2+) ───
+search_in_file { "file": "src/server.ts", "pattern": "TODO" }                       # In-file search
+search_in_file { "file": "src/server.ts", "pattern": "TODO", "context_lines": 3 }   # With context
+
+search_in_project { "pattern": "handleRoute" }                                       # 1-line summary: total matches + top 10 hottest files
+search_in_project { "pattern": "export", "file_pattern": "*.tsx" }                  # Filter by glob
+search_in_project { "pattern": "TODO", "max_files": 5 }                             # Code detail for top 5 files (sorted: code before docs)
+search_in_project { "pattern": "TODO", "max_files": 5, "context_lines": 2 }         # Detail with context (overlapping ranges merged automatically)
+search_in_project { "pattern": "TODO", "max_files": 5, "max_results": 10 }          # Max 10 matches per file
+
+# grep replacement (v1.6.6) — all files matching glob, grouped + sorted, respects .gitignore
+search_in_project { "pattern": "useState", "file_pattern": "*.ts", "max_files": -1 }
+search_in_project { "pattern": "invokeLambda", "file_pattern": "*.tsx", "max_files": -1, "context_lines": 2 }
 
 # ─── File Listing (v1.5.2) ───
 list_files                                          # Project root

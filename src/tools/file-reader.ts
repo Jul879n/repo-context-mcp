@@ -762,8 +762,9 @@ export async function searchInProject(
 ): Promise<string> {
 	// max_results = max matches shown in detail per file (all files always listed)
 	const maxDetailPerFile = Math.max(1, Math.min(maxResults, 100));
-	// max_detail_files = how many files get a detail section (header always shows all)
-	const maxFilesWithDetail = Math.max(0, maxDetailFiles);
+	// max_detail_files: 0 = summary only, N = top N files, -1 = all files (token-budgeted)
+	const showAllFiles = maxDetailFiles === -1;
+	const maxFilesWithDetail = showAllFiles ? Infinity : Math.max(0, maxDetailFiles);
 
 	let regex: RegExp;
 	try {
@@ -868,8 +869,15 @@ export async function searchInProject(
 		return `No matches for "${pattern}" in project (${candidateFiles.length} files searched)`;
 	}
 
-	// Sort by match count descending — hottest files first
-	fileResults.sort((a, b) => b.matchLineIndices.length - a.matchLineIndices.length);
+	// Sort: code files before docs/markdown, then by match count descending within each tier
+	const DOC_EXTENSIONS = new Set(['.md', '.mdx', '.txt', '.rst', '.adoc', '.asciidoc']);
+	const isDocFile = (p: string) => DOC_EXTENSIONS.has(path.extname(p).toLowerCase());
+	fileResults.sort((a, b) => {
+		const aIsDoc = isDocFile(a.relativePath) ? 1 : 0;
+		const bIsDoc = isDocFile(b.relativePath) ? 1 : 0;
+		if (aIsDoc !== bIsDoc) return aIsDoc - bIsDoc;
+		return b.matchLineIndices.length - a.matchLineIndices.length;
+	});
 
 	const totalFiles = fileResults.length;
 	const totalMatches = fileResults.reduce((sum, f) => sum + f.matchLineIndices.length, 0);
@@ -889,32 +897,61 @@ export async function searchInProject(
 		return summaryLine;
 	}
 
-	// Detail mode: summary + code detail for top N files
+	// Detail mode: summary + code detail for top N files (or all if showAllFiles)
+	const TOKEN_BUDGET_CHARS = 16000; // ~4000 tokens hard cap for -1 mode
 	const output: string[] = [summaryLine, ''];
-	const filesToDetail = fileResults.slice(0, maxFilesWithDetail);
+	let charCount = summaryLine.length;
+	let filesShown = 0;
+
+	const filesToDetail = showAllFiles ? fileResults : fileResults.slice(0, maxFilesWithDetail);
 	for (const {relativePath, fullPath, matchLineIndices} of filesToDetail) {
+		if (showAllFiles && charCount >= TOKEN_BUDGET_CHARS) {
+			output.push(`(+${totalFiles - filesShown} more files — token budget reached)`);
+			break;
+		}
+
 		const {lines: fileLines} = await getCachedFile(fullPath);
 		const showCount = Math.min(matchLineIndices.length, maxDetailPerFile);
+		const matchSet = new Set(matchLineIndices.slice(0, showCount));
+		const fileLines_out: string[] = [`${relativePath}:`];
 
-		output.push(`${relativePath}:`);
-		for (let m = 0; m < showCount; m++) {
-			const lineIdx = matchLineIndices[m];
-			if (ctx === 0) {
-				output.push(`  ${lineIdx + 1}: ${fileLines[lineIdx].trim()}`);
-			} else {
-				const start = Math.max(0, lineIdx - ctx);
-				const end = Math.min(fileLines.length - 1, lineIdx + ctx);
+		if (ctx === 0) {
+			for (let m = 0; m < showCount; m++) {
+				const lineIdx = matchLineIndices[m];
+				fileLines_out.push(`  ${lineIdx + 1}: ${fileLines[lineIdx].trim()}`);
+			}
+		} else {
+			// Merge overlapping context ranges to avoid printing duplicate lines
+			const ranges: Array<{start: number; end: number}> = [];
+			for (let m = 0; m < showCount; m++) {
+				const idx = matchLineIndices[m];
+				const s = Math.max(0, idx - ctx);
+				const e = Math.min(fileLines.length - 1, idx + ctx);
+				if (ranges.length > 0 && s <= ranges[ranges.length - 1].end + 1) {
+					ranges[ranges.length - 1].end = Math.max(ranges[ranges.length - 1].end, e);
+				} else {
+					ranges.push({start: s, end: e});
+				}
+			}
+			for (let r = 0; r < ranges.length; r++) {
+				if (r > 0) fileLines_out.push('  ---');
+				const {start, end} = ranges[r];
 				for (let k = start; k <= end; k++) {
-					const marker = k === lineIdx ? '>' : ' ';
-					output.push(`  ${marker}${k + 1}: ${fileLines[k]}`);
+					const marker = matchSet.has(k) ? '>' : ' ';
+					fileLines_out.push(`  ${marker}${k + 1}: ${fileLines[k].trimEnd()}`);
 				}
 			}
 		}
 		if (matchLineIndices.length > showCount) {
-			output.push(`  ... (${matchLineIndices.length - showCount} more)`);
+			fileLines_out.push(`  ... (${matchLineIndices.length - showCount} more)`);
 		}
+
+		const block = fileLines_out.join('\n');
+		output.push(block);
+		charCount += block.length;
+		filesShown++;
 	}
-	if (totalFiles > maxFilesWithDetail) {
+	if (!showAllFiles && totalFiles > maxFilesWithDetail) {
 		output.push(`(+${totalFiles - maxFilesWithDetail} more files)`);
 	}
 

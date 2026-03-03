@@ -171,12 +171,15 @@ const tools: Tool[] = [
 	{
 		name: 'search_in_project',
 		description:
-			'Search across all project files. Default: 1-line compact output — total matches, file count, top 5 hottest files. Use max_files=N for code detail on N files.',
+			'Search across all project files. Default: 1-line compact output — total matches, file count, top 10 hottest files. Use max_files=N for code detail on N files. Use max_files=-1 with file_pattern to get all matching files grouped and sorted (replaces grep).',
 		inputSchema: {
 			type: 'object',
 			properties: {
 				pattern: {type: 'string', description: 'Pattern (string/regex)'},
-				file_pattern: {type: 'string', description: 'Glob filter (e.g. "*.tsx")'},
+				file_pattern: {
+					type: 'string',
+					description: 'Glob filter (e.g. "*.tsx", "**/*.ts"). With max_files=-1 acts as precise grep replacement',
+				},
 				max_results: {
 					type: 'number',
 					description: 'Max matches shown per file in detail (default: 30)',
@@ -185,7 +188,7 @@ const tools: Tool[] = [
 				max_files: {
 					type: 'number',
 					description:
-						'Files to show code detail for (default: 0 = compact summary only). Use max_files=5 to see code.',
+						'Files to show code detail for (default: 0 = compact summary only). Use max_files=5 to see code. Use max_files=-1 with file_pattern to show ALL matching files grouped by file, sorted by match count — respects .gitignore, skips binaries.',
 				},
 			},
 			required: ['pattern'],
