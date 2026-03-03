@@ -2,6 +2,13 @@
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. **Better than CLAUDE.md** because it's dynamic, accurate, and uses minimal tokens.
 
+## What's New in v1.6.5
+
+- **⚡ Compact search by default (`search_in_project`)**: Returns a single summary line with total matches, file count, and top 10 hottest files inline — saving tokens on every search. Use `max_files=N` to also get code detail for the N most-matched files.
+- **🔥 Hottest files first**: Results are now sorted by match count descending, so the most relevant files always appear first.
+- **🆕 `max_files` parameter**: Controls how many files receive a code detail section (default: `0` = summary only). Replaces the old always-on detail behavior.
+- **🔇 Quieter context**: `context_lines` now defaults to `0` (was `1`) for cleaner compact output.
+
 ## What's New in v1.6.3
 
 - **🔍 Complete search coverage (`search_in_project`)**: Scans every file without early exit — no file is ever silently skipped. Output always lists all matching files in the header, even when per-file detail is truncated. `max_results` now controls matches shown per file in detail, not a global cap that caused hot files to crowd out others.
@@ -128,9 +135,10 @@ read_file_symbol { "file": "src/server.ts", "symbol": "createServer" }     # Fuz
 
 # ─── Search (v1.5.2) ───
 search_in_file { "file": "src/server.ts", "pattern": "TODO" }             # In-file
-search_in_project { "pattern": "handleRoute" }                            # Cross-file grep — always lists ALL matching files
-search_in_project { "pattern": "export", "file_pattern": "*.tsx" }        # With glob filter
-search_in_project { "pattern": "TODO", "max_results": 5 }                 # max_results = matches shown per file in detail
+search_in_project { "pattern": "handleRoute" }                                       # Compact: 1-line summary, top 10 hottest files
+search_in_project { "pattern": "export", "file_pattern": "*.tsx" }                  # With glob filter
+search_in_project { "pattern": "TODO", "max_files": 5 }                             # Show code detail for top 5 files
+search_in_project { "pattern": "TODO", "max_files": 5, "max_results": 10 }          # Detail: max 10 matches per file
 
 # ─── File Listing (v1.5.2) ───
 list_files                                          # Project root
