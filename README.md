@@ -2,6 +2,10 @@
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. **Better than CLAUDE.md** because it's dynamic, accurate, and uses minimal tokens.
 
+## What's New in v1.6.1
+
+- **🌍 Multi-language Diagnostics (`get_diagnostics`)**: Auto-detects project language and runs the right checker — `cargo check`, `go vet`, `mypy`/`ruff`, `dotnet build`, `mvn compile`, `rubocop`, `swift build`, `php -l`, or `tsc`. Spelling errors, warnings and progress output are filtered out. Only fatal errors returned.
+
 ## What's New in v1.6.0
 
 - **🩺 Smart Diagnostics (`get_diagnostics`)**: Runs project linters or typechecks and aggressively strips out noise (cSpell, style warnings) to save thousands of tokens. Returns only fatal errors.
@@ -114,8 +118,8 @@ annotate { "action": "list" }
 annotate { "action": "add", "category": "businessRules", "text": "..." }
 annotate { "action": "remove", "category": "gotchas", "index": 0 }
 
-# ─── Diagnostics (v1.6.0) ───
-get_diagnostics                                     # Runs linter/tsc and returns ONLY fatal errors (filters cspell/warnings)
+# ─── Diagnostics (v1.6.1) ───
+get_diagnostics                                     # Auto-detects language, runs checker, returns ONLY fatal errors
 
 # ─── Docs ───
 generate_project_docs                               # Force regenerate .repo-context/

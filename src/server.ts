@@ -207,7 +207,7 @@ const tools: Tool[] = [
 	{
 		name: 'get_diagnostics',
 		description:
-			'Run project diagnostics (lint/typecheck) and return ONLY fatal errors. Eliminates noise and saves tokens.',
+			'Run project diagnostics and return ONLY fatal errors. Auto-detects language (TypeScript, Rust, Go, Python, .NET, Java, Ruby, Swift, PHP) and runs the appropriate checker. Spelling errors and warnings are filtered out to save tokens.',
 		inputSchema: {
 			type: 'object',
 			properties: {},
@@ -1477,9 +1477,8 @@ export function createServer(): Server {
 							{
 								type: 'text',
 								text: [
-									`[Diagnostics] Command run: ${diagResult.command}`,
-									`Fatal errors found: ${diagResult.errorCount}`,
-									`Noise lines filtered: ${diagResult.filteredLines} (tokens saved!)`,
+									`[Diagnostics] Language: ${diagResult.language} | Command: ${diagResult.command}`,
+									`Fatal errors: ${diagResult.errorCount} | Noise filtered: ${diagResult.filteredLines} lines`,
 									`---`,
 									diagResult.output,
 								].join('\n'),

@@ -1,153 +1,368 @@
 import {exec} from 'child_process';
 import {promisify} from 'util';
 import {join} from 'path';
-import {readFile} from 'fs/promises';
+import {readFile, access} from 'fs/promises';
+import {glob} from 'glob';
 
 const execAsync = promisify(exec);
 
 export interface DiagnosticResult {
 	command: string;
+	language: string;
 	errorCount: number;
 	output: string;
 	filteredLines: number;
 }
 
-/**
- * Executes a diagnostic command (typecheck or lint) and aggressively filters out
- * non-fatal errors (spelling, style warnings) to save context tokens.
- */
-export async function getDiagnostics(
-	projectRoot: string
-): Promise<DiagnosticResult> {
-	let commandToRun = 'npx tsc --noEmit'; // Default fallback
+interface LangConfig {
+	language: string;
+	/** Files/globs whose presence indicates this language (first match wins) */
+	indicators: string[];
+	/** Shell command to run. Empty string means determined dynamically. */
+	command: string;
+	/** Lines matching these patterns are KEPT as real errors */
+	errorPatterns: RegExp[];
+	/** Lines matching these patterns are DISCARDED as noise */
+	noisePatterns: RegExp[];
+}
 
+// ─── Noise common to every language ─────────────────────────────────────────
+const COMMON_NOISE: RegExp[] = [
+	/\b(cspell|spellcheck|spell-check)\b/i,
+	/unknown word/i,
+	/\bspelling\b/i,
+	/^> /,             // npm run prefix
+	/^> .*@\d/,        // npm package@version line
+	/eslint-disable/i,
+	/^npm warn/i,
+	/^npm notice/i,
+	/^\s*$/,           // blank-ish lines
+];
+
+// Lines that mean "everything is fine" → discard silently
+const CLEAN_PATTERNS: RegExp[] = [
+	/no issues found/i,
+	/0 errors/i,
+	/everything is fine/i,
+	/^ok$/i,
+	/^success$/i,
+];
+
+// ─── Per-language configs (checked in order) ─────────────────────────────────
+const LANGUAGE_CONFIGS: LangConfig[] = [
+	// Rust
+	{
+		language: 'rust',
+		indicators: ['Cargo.toml'],
+		command: 'cargo check 2>&1',
+		errorPatterns: [
+			/^error(\[E\d+\])?:/,
+			/^error: aborting/,
+		],
+		noisePatterns: [
+			/^warning:/,
+			/^note:/,
+			/^help:/,
+			/^\s*= (note|help):/,
+			/^Checking /,
+			/^Compiling /,
+			/^Finished /,
+		],
+	},
+	// Go
+	{
+		language: 'go',
+		indicators: ['go.mod'],
+		command: 'go vet ./... 2>&1',
+		errorPatterns: [
+			/^#/,           // package header before errors
+			/:\d+:\d+:/,    // file:line:col: message
+			/^vet:/,
+		],
+		noisePatterns: [
+			/^ok\s/,
+			/^\?\s/,
+		],
+	},
+	// Python — command resolved dynamically
+	{
+		language: 'python',
+		indicators: ['pyproject.toml', '.mypy.ini', 'setup.cfg', 'Pipfile', 'setup.py', 'requirements.txt'],
+		command: '',
+		errorPatterns: [
+			/: error:/i,
+			/^Found \d+ error/i,
+			/^\S+\.py:\d+: error/i,
+			/^E\d{3,}/,         // pylint Exxx
+			/^error:/i,
+		],
+		noisePatterns: [
+			/^note:/i,
+			/^Success:/i,
+			/^\[mypy\]/i,
+			/^Your code has been rated/i,
+		],
+	},
+	// .NET / C# / F#
+	{
+		language: 'dotnet',
+		indicators: ['*.csproj', '*.sln', '*.fsproj'],
+		command: 'dotnet build --no-restore -v q 2>&1',
+		errorPatterns: [
+			/error [A-Z]+\d+:/i,
+			/Error\(/i,
+			/Build FAILED/i,
+			/^\s*\d+ Error(s)?/i,
+		],
+		noisePatterns: [
+			/warning [A-Z]+\d+:/i,
+			/Build succeeded/i,
+			/^\s*\d+ Warning(s)?/i,
+			/^Time Elapsed/i,
+		],
+	},
+	// Java — Maven
+	{
+		language: 'java-maven',
+		indicators: ['pom.xml'],
+		command: 'mvn compile -q 2>&1',
+		errorPatterns: [
+			/^\[ERROR\]/,
+			/^error:/i,
+			/BUILD FAILURE/,
+		],
+		noisePatterns: [
+			/^\[WARNING\]/,
+			/^\[INFO\]/,
+			/BUILD SUCCESS/,
+		],
+	},
+	// Java/Kotlin — Gradle
+	{
+		language: 'java-gradle',
+		indicators: ['build.gradle', 'build.gradle.kts'],
+		command: './gradlew compileJava 2>&1',
+		errorPatterns: [
+			/^error:/i,
+			/FAILED/,
+			/^\d+ error/i,
+		],
+		noisePatterns: [
+			/^warning:/i,
+			/^Note:/,
+			/^> Task/,
+			/^BUILD SUCCESSFUL/,
+			/^\d+ actionable task/,
+		],
+	},
+	// Ruby
+	{
+		language: 'ruby',
+		indicators: ['Gemfile'],
+		command: 'bundle exec rubocop --format progress 2>&1',
+		errorPatterns: [
+			/: [CEF]: /,        // Convention / Error / Fatal
+			/\d+ offense/i,
+		],
+		noisePatterns: [
+			/: [WR]: /,         // Warning / Refactor
+			/Inspecting \d+ file/i,
+			/no offenses detected/i,
+		],
+	},
+	// Swift
+	{
+		language: 'swift',
+		indicators: ['Package.swift'],
+		command: 'swift build 2>&1',
+		errorPatterns: [
+			/: error: /,
+			/Build complete with \d+ error/i,
+		],
+		noisePatterns: [
+			/: warning: /,
+			/: note: /,
+			/Build complete!/,
+			/Compiling /,
+		],
+	},
+	// PHP
+	{
+		language: 'php',
+		indicators: ['composer.json'],
+		command: 'find . -name "*.php" -not -path "*/vendor/*" | xargs php -l 2>&1',
+		errorPatterns: [
+			/^Parse error:/i,
+			/^Fatal error:/i,
+			/^Errors parsing/i,
+		],
+		noisePatterns: [
+			/^No syntax errors detected/i,
+		],
+	},
+	// Node.js / TypeScript — last (package.json is very generic)
+	{
+		language: 'node',
+		indicators: ['package.json'],
+		command: '', // resolved dynamically
+		errorPatterns: [
+			/error TS\d+:/i,
+			/^Error:/i,
+			/Fatal:/i,
+			/✖ \d+ problem/i,
+			/failed with code/i,
+			/^\S+\.\w+:\d+:\d+:/,
+		],
+		noisePatterns: [
+			/^warning/i,
+			/eslint-disable/i,
+		],
+	},
+];
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+async function fileExists(path: string): Promise<boolean> {
 	try {
-		// Read package.json to find a better specific command
-		const pkgPath = join(projectRoot, 'package.json');
-		const pkgContent = await readFile(pkgPath, 'utf-8');
-		const pkg = JSON.parse(pkgContent);
+		await access(path);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
-		if (pkg.scripts) {
-			if (pkg.scripts.typecheck) {
-				commandToRun = 'npm run typecheck';
-			} else if (pkg.scripts.lint) {
-				// Prefer a lint command if it exists and typecheck doesn't
-				commandToRun = 'npm run lint';
-			} else if (
-				pkg.scripts.build &&
-				typeof pkg.scripts.build === 'string' &&
-				pkg.scripts.build.includes('tsc')
-			) {
-				// If build uses tsc, we can safely just run tsc --noEmit
-				commandToRun = 'npx tsc --noEmit';
-			}
+async function resolveNodeCommand(projectRoot: string): Promise<string> {
+	try {
+		const pkg = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf-8'));
+		if (pkg.scripts?.typecheck) return 'npm run typecheck';
+		if (pkg.scripts?.['type-check']) return 'npm run type-check';
+		if (pkg.scripts?.lint) return 'npm run lint';
+	} catch {}
+	if (await fileExists(join(projectRoot, 'tsconfig.json'))) {
+		return 'npx tsc --noEmit';
+	}
+	return 'node --check index.js 2>&1';
+}
+
+async function resolvePythonCommand(projectRoot: string): Promise<string> {
+	const pyproject = join(projectRoot, 'pyproject.toml');
+	if (await fileExists(pyproject)) {
+		try {
+			const content = await readFile(pyproject, 'utf-8');
+			if (content.includes('[tool.ruff]')) return 'ruff check . 2>&1';
+			if (content.includes('[tool.mypy]')) return 'python -m mypy . 2>&1';
+		} catch {}
+	}
+	if (await fileExists(join(projectRoot, '.mypy.ini'))) {
+		return 'python -m mypy . 2>&1';
+	}
+	return 'python -m mypy . 2>&1';
+}
+
+async function detectConfig(
+	projectRoot: string,
+): Promise<{config: LangConfig; command: string} | null> {
+	for (const config of LANGUAGE_CONFIGS) {
+		for (const indicator of config.indicators) {
+			const found = indicator.includes('*')
+				? (await glob(join(projectRoot, indicator))).length > 0
+				: await fileExists(join(projectRoot, indicator));
+
+			if (!found) continue;
+
+			let command = config.command;
+			if (config.language === 'node') command = await resolveNodeCommand(projectRoot);
+			else if (config.language === 'python') command = await resolvePythonCommand(projectRoot);
+
+			return {config, command};
 		}
-	} catch (error) {
-		// Ignore if package.json doesn't exist or isn't parseable
 	}
+	return null;
+}
 
-	let rawOutput = '';
-	try {
-		console.log(`[repo-context] Running diagnostics command: ${commandToRun}`);
-		// Run the command. We use maxBuffer to prevent it from crashing on large outputs.
-		// npm run lint/tsc will exit with code > 0 if there are errors, which throws in exec.
-		const {stdout, stderr} = await execAsync(
-			`cd "${projectRoot}" && ${commandToRun}`,
-			{
-				maxBuffer: 1024 * 1024 * 5, // 5MB limit
-			}
-		);
-		rawOutput = stdout + '\n' + stderr;
-	} catch (error: any) {
-		// exec throws if exit code != 0, which is exactly what we want for diagnostics
-		rawOutput = (error.stdout || '') + '\n' + (error.stderr || '');
-	}
+// ─── Main export ─────────────────────────────────────────────────────────────
 
-	if (!rawOutput.trim()) {
+export async function getDiagnostics(projectRoot: string): Promise<DiagnosticResult> {
+	const detected = await detectConfig(projectRoot);
+
+	if (!detected) {
 		return {
-			command: commandToRun,
+			command: 'none',
+			language: 'unknown',
 			errorCount: 0,
-			output: 'No issues found. Everything is clean!',
+			output:
+				'Could not detect project language. No known config file found ' +
+				'(package.json, Cargo.toml, go.mod, pyproject.toml, pom.xml, build.gradle, Gemfile, Package.swift, composer.json, *.csproj).',
 			filteredLines: 0,
 		};
 	}
 
-	// Filter the output aggressively
-	const lines = rawOutput.split('\n');
+	const {config, command} = detected;
+	console.log(`[repo-context] Diagnostics [${config.language}]: ${command}`);
+
+	let rawOutput = '';
+	try {
+		const {stdout, stderr} = await execAsync(`cd "${projectRoot}" && ${command}`, {
+			maxBuffer: 1024 * 1024 * 5,
+		});
+		rawOutput = stdout + '\n' + stderr;
+	} catch (err: any) {
+		rawOutput = (err.stdout ?? '') + '\n' + (err.stderr ?? '');
+	}
+
+	if (!rawOutput.trim()) {
+		return {
+			command,
+			language: config.language,
+			errorCount: 0,
+			output: 'No issues found.',
+			filteredLines: 0,
+		};
+	}
+
+	const allNoise = [...COMMON_NOISE, ...config.noisePatterns];
 	const fatalErrors: string[] = [];
 	let filteredCount = 0;
 
-	// Common noise patterns to ignore
-	const ignorePatterns = [
-		/warning/i,
-		/cspell/i,
-		/spellcheck/i,
-		/unknown word/i,
-		/^> /i, // npm run prefixes
-		/^> .*@.*/i, // npm run package info
-		/eslint-disable/i,
-	];
-
-	// Strong indicators of a real error
-	const keepPatterns = [
-		/error TS\d+:/i, // TypeScript error
-		/Error:/i,
-		/Fatal:/i,
-		/✖ \d+ problem/i, // ESLint summary
-		/failed with code/i,
-	];
-
-	for (const line of lines) {
+	for (const line of rawOutput.split('\n')) {
 		const trimmed = line.trim();
 		if (!trimmed) continue;
 
-		// 1. Check if we should explicitly ignore it
-		const shouldIgnore = ignorePatterns.some((regex) => regex.test(trimmed));
-		if (shouldIgnore) {
+		if (CLEAN_PATTERNS.some((r) => r.test(trimmed))) {
+			filteredCount++;
+			continue;
+		}
+		if (allNoise.some((r) => r.test(trimmed))) {
 			filteredCount++;
 			continue;
 		}
 
-		// 2. Check if it's explicitly a severe error
-		const isExplicitError = keepPatterns.some((regex) => regex.test(trimmed));
-
-		// 3. Fallback: if it's not noise, we might want to keep it
-		// For example, file paths in ESLint output: "src/file.ts"
-		// or TS error contexts: "  const a = 1;"
-		// We'll keep lines if they start with a path/line format or spaces (context)
-		// and we are accumulating errors.
-
-		// To be extremely strict as requested, we will ONLY keep strong errors
-		// and immediate context.
-
-		if (isExplicitError || /^[/\w.-]+:\d+:\d+/i.test(trimmed)) {
-			fatalErrors.push(trimmed); // Keep the trimmed explicit error
-		} else if (fatalErrors.length > 0 && line.startsWith(' ')) {
-			// Keep original indentation for context lines immediately following an error
-			fatalErrors.push(line);
+		if (config.errorPatterns.some((r) => r.test(trimmed))) {
+			fatalErrors.push(trimmed);
+		} else if (fatalErrors.length > 0 && (line.startsWith(' ') || line.startsWith('\t'))) {
+			// Indented context line immediately after an error
+			fatalErrors.push(line.trimEnd());
 		} else {
-			// Unclassified noise
 			filteredCount++;
 		}
 	}
 
-	// Limit massive outputs to save tokens
-	const MAX_ERRORS = 50;
-	if (fatalErrors.length > MAX_ERRORS) {
-		const removed = fatalErrors.length - MAX_ERRORS;
-		fatalErrors.length = MAX_ERRORS;
-		fatalErrors.push(
-			`... and ${removed} more error lines truncated to save context.`
-		);
+	// Cap output to save tokens
+	const MAX_LINES = 50;
+	if (fatalErrors.length > MAX_LINES) {
+		const removed = fatalErrors.length - MAX_LINES;
+		fatalErrors.length = MAX_LINES;
+		fatalErrors.push(`... and ${removed} more lines truncated to save tokens.`);
 	}
 
 	return {
-		command: commandToRun,
+		command,
+		language: config.language,
 		errorCount: fatalErrors.length,
 		output:
 			fatalErrors.length > 0
 				? fatalErrors.join('\n')
-				: 'Command executed, but all issues were filtered out as non-fatal noise.',
+				: 'Command ran cleanly — all output filtered as non-fatal noise.',
 		filteredLines: filteredCount,
 	};
 }
