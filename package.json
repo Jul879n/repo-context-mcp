@@ -1,6 +1,6 @@
 {
 	"name": "repo-context-mcp",
-	"version": "1.6.3",
+	"version": "1.6.5",
 	"description": "Universal MCP server that analyzes any codebase and provides structured context to AI assistants, saving tokens by eliminating redundant project exploration",
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",

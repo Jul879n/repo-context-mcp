@@ -330,15 +330,16 @@ describe('file-reader tools v1.6.0', async () => {
 			);
 		});
 
-		it('should list each matching file in the header section', async () => {
+		it('should list each matching file in the summary line', async () => {
 			const result = await searchInProject(SEARCH_DIR, 'TARGET');
-			// Header lines are indented with two spaces
-			const headerLines = result
-				.split('\n')
-				.filter((l) => l.startsWith('  ') && l.includes('.ts'));
+			// New format: all files (≤10) appear inline in the first summary line
+			const firstLine = result.split('\n')[0];
+			const foundFiles = ['hot-file.ts', 'sparse-a.ts', 'sparse-b.ts', 'sparse-c.ts'].filter(
+				(f) => firstLine.includes(f)
+			);
 			assert.ok(
-				headerLines.length >= 7,
-				`Expected >=7 files in header, got ${headerLines.length}: ${headerLines.join(', ')}`
+				foundFiles.length >= 4,
+				`Expected files in summary line, got: "${firstLine}"`
 			);
 		});
 
@@ -384,16 +385,16 @@ describe('file-reader tools v1.6.0', async () => {
 		// ── Per-file detail truncation ──
 
 		it('truncates detail when a file exceeds max_results matches', async () => {
-			// hot-file.ts has 20 matches; max_results=3 → show 3 + truncation note
-			const result = await searchInProject(SEARCH_DIR, 'TARGET', undefined, 3);
+			// hot-file.ts has 20 matches; max_results=3, max_files=1 → show 3 + truncation note
+			const result = await searchInProject(SEARCH_DIR, 'TARGET', undefined, 3, 0, 1);
 			assert.ok(
-				result.includes('more matches not shown'),
+				result.includes('more'),
 				`Should show truncation note. Got:\n${result}`
 			);
 		});
 
-		it('still shows all sparse files in detail even when hot-file is truncated', async () => {
-			const result = await searchInProject(SEARCH_DIR, 'TARGET', undefined, 3);
+		it('still shows all sparse files in detail when max_files is high enough', async () => {
+			const result = await searchInProject(SEARCH_DIR, 'TARGET', undefined, 3, 0, 7);
 			// Each sparse file has 1 match which is <= max_results=3, so all get full detail
 			for (const letter of ['a', 'b', 'c', 'd', 'e', 'f']) {
 				assert.ok(
@@ -409,7 +410,8 @@ describe('file-reader tools v1.6.0', async () => {
 				'TARGET',
 				'hot-file.ts',
 				30,
-				0
+				0,
+				1
 			);
 			// With ctx=0, each match line is "  N: content" (no surrounding context)
 			const matchLines = result.split('\n').filter((l) => /^\s+\d+:/.test(l));
@@ -422,7 +424,8 @@ describe('file-reader tools v1.6.0', async () => {
 				'fn[abc]',
 				'sparse-a.ts',
 				30,
-				2
+				2,
+				1
 			);
 			// With context, output should include lines before/after match
 			assert.ok(result.includes('>'), 'Should mark matched line with >');

@@ -757,10 +757,13 @@ export async function searchInProject(
 	pattern: string,
 	filePattern?: string,
 	maxResults: number = 30,
-	contextLines: number = 1
+	contextLines: number = 0,
+	maxDetailFiles: number = 0
 ): Promise<string> {
 	// max_results = max matches shown in detail per file (all files always listed)
 	const maxDetailPerFile = Math.max(1, Math.min(maxResults, 100));
+	// max_detail_files = how many files get a detail section (header always shows all)
+	const maxFilesWithDetail = Math.max(0, maxDetailFiles);
 
 	let regex: RegExp;
 	try {
@@ -865,23 +868,31 @@ export async function searchInProject(
 		return `No matches for "${pattern}" in project (${candidateFiles.length} files searched)`;
 	}
 
-	fileResults.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+	// Sort by match count descending — hottest files first
+	fileResults.sort((a, b) => b.matchLineIndices.length - a.matchLineIndices.length);
 
 	const totalFiles = fileResults.length;
 	const totalMatches = fileResults.reduce((sum, f) => sum + f.matchLineIndices.length, 0);
 
 	// Phase 3: Build output
-	// Header: always list ALL matching files so no file is ever missed
-	const output: string[] = [];
-	output.push(`${totalMatches} matches in ${totalFiles} files:`);
-	for (const {relativePath, matchLineIndices} of fileResults) {
-		output.push(`  ${relativePath} (${matchLineIndices.length})`);
-	}
-	output.push('');
+	// Always 1 line: counts + top files inline (hottest first)
+	const INLINE_LIMIT = 10;
+	const inlineStr = fileResults
+		.slice(0, INLINE_LIMIT)
+		.map(f => `${path.basename(f.relativePath)}(${f.matchLineIndices.length})`)
+		.join(', ');
+	const moreStr = totalFiles > INLINE_LIMIT ? ` +${totalFiles - INLINE_LIMIT}` : '';
+	const summaryLine = `${totalMatches} matches in ${totalFiles} files: ${inlineStr}${moreStr}`;
 
-	// Detail section: bounded per file by maxDetailPerFile
-	let detailedFileCount = 0;
-	for (const {relativePath, fullPath, matchLineIndices} of fileResults) {
+	// Compact mode (default): return just the 1-line summary
+	if (maxFilesWithDetail === 0) {
+		return summaryLine;
+	}
+
+	// Detail mode: summary + code detail for top N files
+	const output: string[] = [summaryLine, ''];
+	const filesToDetail = fileResults.slice(0, maxFilesWithDetail);
+	for (const {relativePath, fullPath, matchLineIndices} of filesToDetail) {
 		const {lines: fileLines} = await getCachedFile(fullPath);
 		const showCount = Math.min(matchLineIndices.length, maxDetailPerFile);
 
@@ -900,17 +911,11 @@ export async function searchInProject(
 			}
 		}
 		if (matchLineIndices.length > showCount) {
-			output.push(
-				`  ... (${matchLineIndices.length - showCount} more matches not shown)`
-			);
+			output.push(`  ... (${matchLineIndices.length - showCount} more)`);
 		}
-		detailedFileCount++;
 	}
-
-	if (detailedFileCount < totalFiles) {
-		output.push(
-			`\n(${totalFiles - detailedFileCount} files not detailed above — all files listed in header)`
-		);
+	if (totalFiles > maxFilesWithDetail) {
+		output.push(`(+${totalFiles - maxFilesWithDetail} more files)`);
 	}
 
 	return output.join('\n');

@@ -171,7 +171,7 @@ const tools: Tool[] = [
 	{
 		name: 'search_in_project',
 		description:
-			'Search across all project files. Replaces grep. Always lists every file with matches — no file is ever silently skipped.',
+			'Search across all project files. Default: 1-line compact output — total matches, file count, top 5 hottest files. Use max_files=N for code detail on N files.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -179,10 +179,14 @@ const tools: Tool[] = [
 				file_pattern: {type: 'string', description: 'Glob filter (e.g. "*.tsx")'},
 				max_results: {
 					type: 'number',
-					description:
-						'Max matches shown per file in detail (default: 30). All matching files are always listed regardless of this limit.',
+					description: 'Max matches shown per file in detail (default: 30)',
 				},
-				context_lines: {type: 'number', description: 'Context lines (default: 1)'},
+				context_lines: {type: 'number', description: 'Context lines around each match (default: 0)'},
+				max_files: {
+					type: 'number',
+					description:
+						'Files to show code detail for (default: 0 = compact summary only). Use max_files=5 to see code.',
+				},
 			},
 			required: ['pattern'],
 		},
@@ -1416,6 +1420,7 @@ export function createServer(): Server {
 						file_pattern?: string;
 						max_results?: number;
 						context_lines?: number;
+						max_files?: number;
 					};
 					if (!spArgs?.pattern) {
 						return {
@@ -1428,7 +1433,8 @@ export function createServer(): Server {
 						spArgs.pattern,
 						spArgs.file_pattern,
 						spArgs.max_results,
-						spArgs.context_lines
+						spArgs.context_lines,
+						spArgs.max_files
 					);
 					return {
 						content: [{type: 'text', text: projectSearchResult}],
