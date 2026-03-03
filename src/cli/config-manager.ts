@@ -100,19 +100,19 @@ export const TARGETS: TargetConfig[] = [
 					'Application Support',
 					'Code',
 					'User',
-					'settings.json'
+					'mcp.json'
 				);
 			if (platform === 'win32')
 				return path.join(
 					process.env.APPDATA || joinHome('AppData', 'Roaming'),
 					'Code',
 					'User',
-					'settings.json'
+					'mcp.json'
 				);
-			return joinHome('.config', 'Code', 'User', 'settings.json');
+			return joinHome('.config', 'Code', 'User', 'mcp.json');
 		},
-		parentKey: 'mcp',
 		serverEntry: {
+			type: 'stdio',
 			command: 'npx',
 			args: ['repo-context-mcp'],
 		},

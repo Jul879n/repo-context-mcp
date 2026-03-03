@@ -2,6 +2,10 @@
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. **Better than CLAUDE.md** because it's dynamic, accurate, and uses minimal tokens.
 
+## What's New in v1.6.2
+
+- **🔧 Fix VS Code MCP configuration**: Now correctly writes to `mcp.json` (instead of `settings.json`) with `"type": "stdio"` as required by VS Code's native MCP support.
+
 ## What's New in v1.6.1
 
 - **🌍 Multi-language Diagnostics (`get_diagnostics`)**: Auto-detects project language and runs the right checker — `cargo check`, `go vet`, `mypy`/`ruff`, `dotnet build`, `mvn compile`, `rubocop`, `swift build`, `php -l`, or `tsc`. Spelling errors, warnings and progress output are filtered out. Only fatal errors returned.
@@ -73,12 +77,26 @@ repo-context-setup --status
 
 ### Manual Setup
 
-Add to your IDE's MCP config file:
+**Claude Desktop / Cursor / Windsurf** (`claude_desktop_config.json` / `~/.cursor/mcp.json`):
 
 ```json
 {
 	"mcpServers": {
 		"repo-context": {
+			"command": "npx",
+			"args": ["repo-context-mcp"]
+		}
+	}
+}
+```
+
+**VS Code** (`~/Library/Application Support/Code/User/mcp.json` on macOS, `%APPDATA%\Code\User\mcp.json` on Windows):
+
+```json
+{
+	"servers": {
+		"repo-context": {
+			"type": "stdio",
 			"command": "npx",
 			"args": ["repo-context-mcp"]
 		}
