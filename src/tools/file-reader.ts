@@ -637,11 +637,13 @@ export async function readFileLines(
 
 	const selected = lines.slice(start - 1, end);
 	const numbered = selected.map((line, i) => `${start + i}: ${line}`).join('\n');
+	const range = end - start + 1;
 
-	return `[${path.relative(
-		projectRoot,
-		fullPath
-	)}] Lines ${start}-${end} of ${total}\n${numbered}`;
+	// Compact header for small ranges (saves tokens)
+	if (range <= 30) {
+		return `L${start}-${end}/${total}\n${numbered}`;
+	}
+	return `[${path.relative(projectRoot, fullPath)}] L${start}-${end} of ${total}\n${numbered}`;
 }
 
 // ─── READ FILE SYMBOL ───
@@ -772,7 +774,8 @@ export async function searchInProject(
 	filePattern?: string,
 	maxResults: number = 30,
 	contextLines: number = 0,
-	maxDetailFiles: number = 0
+	maxDetailFiles: number = 0,
+	excludePattern?: string
 ): Promise<string> {
 	// max_results = max matches shown in detail per file (all files always listed)
 	const maxDetailPerFile = Math.max(1, Math.min(maxResults, 100));
@@ -810,6 +813,9 @@ export async function searchInProject(
 	]);
 
 	const fileGlob = filePattern ? globToRegex(filePattern) : null;
+	const excludeGlobs = excludePattern
+		? excludePattern.split(',').map((p) => globToRegex(p.trim()))
+		: [];
 	const ctx = Math.max(0, Math.min(contextLines, 5));
 
 	// Phase 1: Collect candidate files
@@ -829,6 +835,11 @@ export async function searchInProject(
 					await collectFiles(fullPath, depth + 1);
 				} else if (entry.isFile()) {
 					if (fileGlob && !fileGlob.test(entry.name) && !fileGlob.test(relativePath))
+						continue;
+					if (
+						excludeGlobs.length > 0 &&
+						excludeGlobs.some((eg) => eg.test(entry.name) || eg.test(relativePath))
+					)
 						continue;
 					if (isBinaryExtension(entry.name)) continue;
 					candidateFiles.push({fullPath, relativePath});
@@ -1145,13 +1156,45 @@ function similarity(a: string, b: string): number {
  * Supports * (any chars), ? (single char), and ** (recursive).
  */
 function globToRegex(glob: string): RegExp {
-	const escaped = glob
-		.replace(/[.+^${}()|[\]\\]/g, '\\$&')
-		.replace(/\*\*/g, '§DOUBLE§')
-		.replace(/\*/g, '[^/]*')
-		.replace(/\?/g, '.')
-		.replace(/§DOUBLE§/g, '.*');
-	return new RegExp(`^${escaped}$|${escaped}$`, 'i');
+	// Support comma-separated multi-glob: "*.ts,*.tsx" or brace expansion "*.{ts,tsx}"
+	const expandBraces = (g: string): string[] => {
+		const braceMatch = g.match(/^(.*?)\{([^}]+)\}(.*)$/);
+		if (!braceMatch) return [g];
+		const [, prefix, options, suffix] = braceMatch;
+		return options.split(',').map((opt) => `${prefix}${opt.trim()}${suffix}`);
+	};
+
+	// Split by comma but not inside braces
+	const splitGlobs = (input: string): string[] => {
+		const parts: string[] = [];
+		let depth = 0;
+		let current = '';
+		for (const ch of input) {
+			if (ch === '{') depth++;
+			else if (ch === '}') depth--;
+			if (ch === ',' && depth === 0) {
+				parts.push(current.trim());
+				current = '';
+			} else {
+				current += ch;
+			}
+		}
+		if (current.trim()) parts.push(current.trim());
+		return parts;
+	};
+
+	const patterns = splitGlobs(glob)
+		.flatMap((g) => expandBraces(g))
+		.map((g) => {
+			const escaped = g
+				.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+				.replace(/\*\*/g, '§DOUBLE§')
+				.replace(/\*/g, '[^/]*')
+				.replace(/\?/g, '.')
+				.replace(/§DOUBLE§/g, '.*');
+			return `(?:^${escaped}$|${escaped}$)`;
+		});
+	return new RegExp(patterns.join('|'), 'i');
 }
 
 /**
@@ -1375,4 +1418,83 @@ export async function getAllOutlines(
 
 	await scan(projectRoot);
 	return results;
+}
+
+// ─── SEARCH SYMBOL IN PROJECT ───
+
+/**
+ * Search for a symbol across all project files.
+ * Returns matching symbols with file, type, signature, and export status.
+ */
+export async function searchSymbolInProject(
+	projectRoot: string,
+	symbolName: string,
+	symbolType?: string,
+	exportedOnly?: boolean
+): Promise<string> {
+	const allOutlines = await getAllOutlines(projectRoot);
+
+	interface SymbolMatch {
+		file: string;
+		symbol: FileSymbol;
+		score: number;
+	}
+
+	const matches: SymbolMatch[] = [];
+	const lowerName = symbolName.toLowerCase();
+
+	for (const [file, {symbols}] of allOutlines) {
+		for (const sym of symbols) {
+			if (symbolType && sym.type !== symbolType) continue;
+			if (exportedOnly && !sym.exported) continue;
+
+			const symLower = sym.name.toLowerCase();
+
+			// Exact match
+			if (sym.name === symbolName) {
+				matches.push({file, symbol: sym, score: 1.0});
+			}
+			// Case-insensitive exact
+			else if (symLower === lowerName) {
+				matches.push({file, symbol: sym, score: 0.95});
+			}
+			// Substring match (query contained in symbol name, min 4 chars to avoid noise)
+			else if (lowerName.length >= 4 && symLower.includes(lowerName)) {
+				matches.push({file, symbol: sym, score: 0.7});
+			}
+			// Fuzzy similarity (only for names of similar length)
+			else if (Math.min(symLower.length, lowerName.length) >= 4) {
+				const score = similarity(symbolName, sym.name);
+				if (score >= 0.7) {
+					matches.push({file, symbol: sym, score});
+				}
+			}
+		}
+	}
+
+	if (matches.length === 0) {
+		return `No symbols matching "${symbolName}" found in project.`;
+	}
+
+	// Sort by score desc, then by file
+	matches.sort((a, b) => b.score - a.score || a.file.localeCompare(b.file));
+
+	// Cap at 30 results
+	const shown = matches.slice(0, 30);
+	const lines: string[] = [];
+	lines.push(`${matches.length} symbol${matches.length > 1 ? 's' : ''} matching "${symbolName}":`);
+	lines.push('');
+
+	for (const m of shown) {
+		const exp = m.symbol.exported ? 'export ' : '';
+		lines.push(
+			`${m.file}:${m.symbol.startLine} ${exp}[${m.symbol.type}] ${m.symbol.name} (L${m.symbol.startLine}-${m.symbol.endLine})`
+		);
+	}
+
+	if (matches.length > 30) {
+		lines.push(`... +${matches.length - 30} more`);
+	}
+
+	return lines.join('\n');
 }

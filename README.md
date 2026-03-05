@@ -1,76 +1,14 @@
 # repo-context-mcp
 
-Universal MCP server that analyzes any codebase and provides structured context to AI assistants. **Better than CLAUDE.md** because it's dynamic, accurate, and uses minimal tokens.
+Universal MCP server that analyzes any codebase and provides structured context to AI assistants. Dynamic, accurate, and token-efficient.
 
-## What's New in v1.6.7
+## What's New in v1.7.0
 
-- **🔎 `read_file_symbol` soporta `const` variables**: Ahora detecta `export const TIMEOUT = 5000`, `export const CONFIG = {...}`, `export const ROUTES = [...]` con tipo `[const]`. Antes solo encontraba funciones, clases e interfaces.
-- **📍 Paths relativos en search summary**: Cuando varios archivos comparten el mismo nombre (ej. múltiples `index.ts`), el resumen inline muestra el path relativo (`src/types/index.ts`) en lugar del basename ambiguo.
-- **🐛 Fix endLine para const con brackets**: `findConstEnd` rastrea `{`, `[` y `(` en lugar de solo `{`, evitando que el rango de una constante se "filtre" hasta la siguiente función del archivo.
+- **`search_symbol`** — global symbol search across all project files. Fuzzy matching, filter by type or exported-only.
+- **`exclude_pattern`** in `search_in_project` — exclude files by glob (e.g. `"*.md"`, `"docs/**"`). Comma-separated for multiple patterns.
+- **Diff-aware hot files** — `get_project_context` detects `git diff` modified files and surfaces them with reason `modified`.
 
-## What's New in v1.6.6
-
-- **🔍 `max_files=-1` — grep replacement**: Use `file_pattern` + `max_files=-1` to get ALL matching files, grouped by file and sorted by match count. Respects `.gitignore`, skips binaries. 1.8x cheaper than native grep (no absolute-path overhead, grouped output). Hard token budget of ~4000t to prevent runaway output in large projects.
-- **📁 Code files before docs**: Results now sort code files (`.ts`, `.tsx`, `.js`, etc.) before documentation/markdown files within the same match-count tier. Prevents `.md` plans from crowding out real code in the top results.
-- **🔗 Merged context ranges**: When `context_lines > 0` and matches are close together, overlapping context windows are merged into contiguous blocks separated by `---`. Eliminates duplicate lines, saves 25–35% tokens on dense matches.
-
-## What's New in v1.6.5
-
-- **⚡ Compact search by default (`search_in_project`)**: Returns a single summary line with total matches, file count, and top 10 hottest files inline — saving tokens on every search. Use `max_files=N` to also get code detail for the N most-matched files.
-- **🔥 Hottest files first**: Results are now sorted by match count descending, so the most relevant files always appear first.
-- **🆕 `max_files` parameter**: Controls how many files receive a code detail section (default: `0` = summary only). Replaces the old always-on detail behavior.
-- **🔇 Quieter context**: `context_lines` now defaults to `0` (was `1`) for cleaner compact output.
-
-## What's New in v1.6.3
-
-- **🔍 Complete search coverage (`search_in_project`)**: Scans every file without early exit — no file is ever silently skipped. Output always lists all matching files in the header, even when per-file detail is truncated. `max_results` now controls matches shown per file in detail, not a global cap that caused hot files to crowd out others.
-
-## What's New in v1.6.2
-
-- **🔧 Fix VS Code MCP configuration**: Now correctly writes to `mcp.json` (instead of `settings.json`) with `"type": "stdio"` as required by VS Code's native MCP support.
-
-## What's New in v1.6.1
-
-- **🌍 Multi-language Diagnostics (`get_diagnostics`)**: Auto-detects project language and runs the right checker — `cargo check`, `go vet`, `mypy`/`ruff`, `dotnet build`, `mvn compile`, `rubocop`, `swift build`, `php -l`, or `tsc`. Spelling errors, warnings and progress output are filtered out. Only fatal errors returned.
-
-## What's New in v1.6.0
-
-- **🩺 Smart Diagnostics (`get_diagnostics`)**: Runs project linters or typechecks and aggressively strips out noise (cSpell, style warnings) to save thousands of tokens. Returns only fatal errors.
-
-## What's New in v1.5.3
-
-- **🧠 In-Memory File Cache**: 10s TTL — avoids redundant disk reads during multi-step workflows
-- **📦 Outline Cache**: Parsed outlines cached separately — `read_file` → `read_file_symbol` uses 1 read instead of 3
-- **⚡ Parallel Search**: `search_in_project` processes files in batches via `Promise.all`
-- **🔒 Thread-safe Regex**: Per-file regex instances in parallel search to avoid `lastIndex` conflicts
-
-## What's New in v1.5.2
-
-- **🔍 `search_in_project`**: Cross-file search replacing native grep — respects `.gitignore`
-- **📁 `list_files`**: Project file listing replacing native `list_dir` — with sizes & glob filter
-- **📄 `read_file`**: Smart reader — full content for <200L files, auto-outline for large files
-- **⚡ Token optimized**: 21→10 tools exposed (~900 fewer tokens per API message)
-- **🧠 Fuzzy matching**: `read_file_symbol` finds symbols by partial name or typo
-- **🔎 `search_in_file`**: No more 10-match limit (now 50), compact output (-43% tokens)
-- **📦 `annotate`**: Unified add/remove/list annotations in one tool
-- **🎯 `get_project_context`**: New `section` param for specific info (stack, endpoints, etc.)
-
-## What's New in v1.5.0
-
-- **📖 Smart File Reader**: 4 tools for precise, token-efficient file reading
-- **📋 OUTLINES.md**: Auto-generated outlines for all source files (0 tokens)
-- **🎯 Antigravity optimized**: `file-reader-guide` prompt, dynamic outline resources
-
-## What's New in v1.4.0
-
-- **🧙 Interactive Setup Wizard**: `repo-context-setup` auto-configures your IDEs/AIs
-- **9 IDEs supported**: Claude Desktop, Cursor, Windsurf, VS Code, Cline, Zed, OpenCode, Codex, Antigravity
-
-## What's New in v1.3.0
-
-- **📝 Zero-Token Auto-Docs**: Auto-generates `.repo-context/` on startup
-- **👁️ File Watcher**: Auto-regenerates docs on code changes
-- **🔥 Hot Files Detection, Import Graph, Annotations**
+See [CHANGELOG.md](./CHANGELOG.md) for previous versions.
 
 ## Quick Setup
 
@@ -129,7 +67,7 @@ repo-context-setup --status
 
 ## Usage
 
-### Tools (10 exposed — optimized for minimal token overhead)
+### Tools (12 exposed — optimized for minimal token overhead)
 
 ```bash
 # ─── Project Context ───
@@ -158,6 +96,15 @@ search_in_project { "pattern": "TODO", "max_files": 5, "max_results": 10 }      
 # grep replacement (v1.6.6) — all files matching glob, grouped + sorted, respects .gitignore
 search_in_project { "pattern": "useState", "file_pattern": "*.ts", "max_files": -1 }
 search_in_project { "pattern": "invokeLambda", "file_pattern": "*.tsx", "max_files": -1, "context_lines": 2 }
+
+# exclude docs/markdown from results (v1.7.0)
+search_in_project { "pattern": "handleRoute", "exclude_pattern": "*.md" }
+search_in_project { "pattern": "TODO", "exclude_pattern": "*.md,docs/**", "max_files": 5 }
+
+# ─── Global Symbol Search (v1.7.0) ───
+search_symbol { "name": "createServer" }                                      # Find symbol across project (fuzzy)
+search_symbol { "name": "User", "type": "interface" }                         # Filter by type
+search_symbol { "name": "handle", "exported_only": true }                     # Only exported symbols
 
 # ─── File Listing (v1.5.2) ───
 list_files                                          # Project root

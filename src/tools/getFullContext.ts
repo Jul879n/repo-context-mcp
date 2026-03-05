@@ -1,6 +1,10 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import {ProjectContext} from '../types/index.js';
+import {execFile} from 'child_process';
+import {promisify} from 'util';
+import {ProjectContext, HotFile} from '../types/index.js';
+
+const execFileAsync = promisify(execFile);
 import {CacheManager, FastCache} from '../cache/manager.js';
 import {
 	detectStack,
@@ -74,6 +78,28 @@ export async function analyzeProject(
 			detectImportGraph(projectRoot, stack.primaryLanguage),
 			readAnnotations(projectRoot),
 		]);
+
+	// Enrich hot files with git-modified files
+	const modifiedFiles = await getGitModifiedFiles(projectRoot);
+	if (modifiedFiles.size > 0) {
+		const existingPaths = new Set(hotFiles.files.map((f) => f.file));
+		// Mark existing hot files as modified
+		for (const hf of hotFiles.files) {
+			if (modifiedFiles.has(hf.file)) {
+				hf.reason = 'modified,' + hf.reason;
+			}
+		}
+		// Add modified files that aren't already hot
+		for (const mf of modifiedFiles) {
+			if (!existingPaths.has(mf)) {
+				hotFiles.files.unshift({
+					file: mf,
+					lines: 0,
+					reason: 'modified',
+				});
+			}
+		}
+	}
 
 	// Check if annotations has any content
 	const hasAnnotations =
@@ -202,6 +228,22 @@ async function getProjectVersion(
 	} catch {}
 
 	return undefined;
+}
+
+async function getGitModifiedFiles(projectRoot: string): Promise<Set<string>> {
+	try {
+		const {stdout} = await execFileAsync('git', ['diff', '--name-only', 'HEAD'], {
+			cwd: projectRoot,
+			timeout: 5000,
+		});
+		const files = stdout
+			.trim()
+			.split('\n')
+			.filter((f) => f.length > 0);
+		return new Set(files);
+	} catch {
+		return new Set();
+	}
 }
 
 export async function refreshContext(

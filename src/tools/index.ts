@@ -13,5 +13,6 @@ export {
 	listFiles,
 	readFile,
 	getAllOutlines,
+	searchSymbolInProject,
 } from './file-reader.js';
 export {getDiagnostics} from './diagnostics.js';

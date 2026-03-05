@@ -23,6 +23,7 @@ import {
 	listFiles,
 	readFile,
 	getDiagnostics,
+	searchSymbolInProject,
 } from './tools/index.js';
 import {ProjectContext} from './types/index.js';
 import {startWatcher} from './watcher.js';
@@ -178,7 +179,7 @@ const tools: Tool[] = [
 				pattern: {type: 'string', description: 'Pattern (string/regex)'},
 				file_pattern: {
 					type: 'string',
-					description: 'Glob filter (e.g. "*.tsx", "**/*.ts"). With max_files=-1 acts as precise grep replacement',
+					description: 'Glob filter. Supports multi-glob: "*.ts,*.tsx" or brace expansion "*.{ts,tsx}". With max_files=-1 acts as grep replacement',
 				},
 				max_results: {
 					type: 'number',
@@ -189,6 +190,11 @@ const tools: Tool[] = [
 					type: 'number',
 					description:
 						'Files to show code detail for (default: 0 = compact summary only). Use max_files=5 to see code. Use max_files=-1 with file_pattern to show ALL matching files grouped by file, sorted by match count — respects .gitignore, skips binaries.',
+				},
+				exclude_pattern: {
+					type: 'string',
+					description:
+						'Glob pattern to exclude files (e.g. "*.md", "docs/**"). Comma-separated for multiple patterns.',
 				},
 			},
 			required: ['pattern'],
@@ -224,6 +230,27 @@ const tools: Tool[] = [
 			type: 'object',
 			properties: {},
 			required: [],
+		},
+	},
+	{
+		name: 'search_symbol',
+		description:
+			'Search for a symbol (function, class, interface, type, const, enum) across ALL project files. Returns file location, type, signature, and exported status. Fuzzy matching supported.',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				name: {type: 'string', description: 'Symbol name to search for (supports fuzzy matching)'},
+				type: {
+					type: 'string',
+					description: 'Filter by symbol type',
+					enum: ['function', 'class', 'interface', 'type', 'const', 'enum', 'method', 'export'],
+				},
+				exported_only: {
+					type: 'boolean',
+					description: 'Only return exported symbols (default: false)',
+				},
+			},
+			required: ['name'],
 		},
 	},
 ];
@@ -1424,6 +1451,7 @@ export function createServer(): Server {
 						max_results?: number;
 						context_lines?: number;
 						max_files?: number;
+						exclude_pattern?: string;
 					};
 					if (!spArgs?.pattern) {
 						return {
@@ -1437,10 +1465,35 @@ export function createServer(): Server {
 						spArgs.file_pattern,
 						spArgs.max_results,
 						spArgs.context_lines,
-						spArgs.max_files
+						spArgs.max_files,
+						spArgs.exclude_pattern
 					);
 					return {
 						content: [{type: 'text', text: projectSearchResult}],
+					};
+				}
+
+
+				case 'search_symbol': {
+					const ssArgs = args as {
+						name: string;
+						type?: string;
+						exported_only?: boolean;
+					};
+					if (!ssArgs?.name) {
+						return {
+							content: [{type: 'text', text: 'Error: name is required.'}],
+							isError: true,
+						};
+					}
+					const symbolResult = await searchSymbolInProject(
+						PROJECT_ROOT,
+						ssArgs.name,
+						ssArgs.type,
+						ssArgs.exported_only
+					);
+					return {
+						content: [{type: 'text', text: symbolResult}],
 					};
 				}
 
