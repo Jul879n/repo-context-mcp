@@ -2,11 +2,14 @@
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. Dynamic, accurate, and token-efficient.
 
-## What's New in v1.7.0
+## What's New in v1.8.0
 
-- **`search_symbol`** — global symbol search across all project files. Fuzzy matching, filter by type or exported-only.
-- **`exclude_pattern`** in `search_in_project` — exclude files by glob (e.g. `"*.md"`, `"docs/**"`). Comma-separated for multiple patterns.
-- **Diff-aware hot files** — `get_project_context` detects `git diff` modified files and surfaces them with reason `modified`.
+- **Bug fix: diff-aware 0L** — modified files added to hotfiles now show real line counts instead of `0L`.
+- **`section="modified"`** in `get_project_context` — dedicated section for git-modified files only (no mixing with oversized).
+- **`depth=1`** in `read_file_outline` — top-level symbols only. Reduces ~450 tokens to ~80 tokens on complex files.
+- **Multi-name `search_symbol`** — search multiple symbols at once: `"handleDelete,handleEdit"`.
+- **Fuzzy match indicator** in `search_symbol` — results now show `~ci` (case-insensitive), `~sub` (substring), `~fuzzy` tags. Header shows `(fuzzy — no exact match found)` when no exact match exists.
+- **`max_files=-1` default limit** in `search_in_project` — when showing all files, `max_results` defaults to 5 per file (was 30) to avoid token budget blowup. Override with explicit `max_results`.
 
 See [CHANGELOG.md](./CHANGELOG.md) for previous versions.
 
@@ -74,13 +77,15 @@ repo-context-setup --status
 get_project_context                                # Full context (default: compact)
 get_project_context { "format": "ultra" }          # Ultra-efficient (~165 tokens)
 get_project_context { "section": "stack" }         # Specific section only
-get_project_context { "section": "endpoints" }     # Sections: stack|structure|endpoints|models|status|hotfiles|imports|annotations
+get_project_context { "section": "endpoints" }     # Sections: stack|structure|endpoints|models|status|hotfiles|modified|imports|annotations
+get_project_context { "section": "modified" }      # Git-modified files only (v1.8.0)
 get_project_context { "force_refresh": true }      # Force re-analysis
 
 # ─── Smart File Reading (v1.5.2) ───
 read_file { "file": "src/server.ts" }              # Smart: full if <200L, outline if >200L
 read_file { "file": "src/server.ts", "start_line": 100, "end_line": 150 }  # Range
-read_file_outline { "file": "src/server.ts" }      # Outline: symbols + line ranges
+read_file_outline { "file": "src/server.ts" }                    # Outline: all symbols + line ranges
+read_file_outline { "file": "src/server.ts", "depth": 1 }       # Top-level only (~80t vs ~450t) (v1.8.0)
 read_file_symbol { "file": "src/server.ts", "symbol": "createServer" }     # Fuzzy match
 
 # ─── Search (v1.5.2+) ───
@@ -92,6 +97,7 @@ search_in_project { "pattern": "export", "file_pattern": "*.tsx" }              
 search_in_project { "pattern": "TODO", "max_files": 5 }                             # Code detail for top 5 files (sorted: code before docs)
 search_in_project { "pattern": "TODO", "max_files": 5, "context_lines": 2 }         # Detail with context (overlapping ranges merged automatically)
 search_in_project { "pattern": "TODO", "max_files": 5, "max_results": 10 }          # Max 10 matches per file
+# max_files=-1 defaults to 5 matches/file to avoid token blowup (v1.8.0) — override with max_results
 
 # grep replacement (v1.6.6) — all files matching glob, grouped + sorted, respects .gitignore
 search_in_project { "pattern": "useState", "file_pattern": "*.ts", "max_files": -1 }
@@ -101,10 +107,11 @@ search_in_project { "pattern": "invokeLambda", "file_pattern": "*.tsx", "max_fil
 search_in_project { "pattern": "handleRoute", "exclude_pattern": "*.md" }
 search_in_project { "pattern": "TODO", "exclude_pattern": "*.md,docs/**", "max_files": 5 }
 
-# ─── Global Symbol Search (v1.7.0) ───
+# ─── Global Symbol Search (v1.7.0+) ───
 search_symbol { "name": "createServer" }                                      # Find symbol across project (fuzzy)
 search_symbol { "name": "User", "type": "interface" }                         # Filter by type
 search_symbol { "name": "handle", "exported_only": true }                     # Only exported symbols
+search_symbol { "name": "handleDelete,handleEdit" }                           # Multi-name search (v1.8.0)
 
 # ─── File Listing (v1.5.2) ───
 list_files                                          # Project root

@@ -14,6 +14,8 @@ import {
 import {
 	getFullContext,
 	refreshContext,
+	analyzeProject,
+	getGitModifiedFiles,
 	generateDocs,
 	getFileOutline,
 	readFileLines,
@@ -73,10 +75,11 @@ const tools: Tool[] = [
 						'models',
 						'status',
 						'hotfiles',
+						'modified',
 						'imports',
 						'annotations',
 					],
-					description: 'Specific section (default: all)',
+					description: 'Specific section (default: all). Use "modified" for git-modified files only.',
 				},
 				force_refresh: {
 					type: 'boolean',
@@ -134,11 +137,12 @@ const tools: Tool[] = [
 	},
 	{
 		name: 'read_file_outline',
-		description: 'File outline: symbols with line ranges (~100 tokens).',
+		description: 'File outline: symbols with line ranges (~100 tokens). Use depth=1 for top-level only (~80t vs ~450t on complex files).',
 		inputSchema: {
 			type: 'object',
 			properties: {
 				file: {type: 'string', description: 'Relative path'},
+				depth: {type: 'number', description: 'Symbol depth: 1 = top-level only (no nested consts/functions). Reduces ~450t to ~80t for complex files.'},
 			},
 			required: ['file'],
 		},
@@ -239,7 +243,7 @@ const tools: Tool[] = [
 		inputSchema: {
 			type: 'object',
 			properties: {
-				name: {type: 'string', description: 'Symbol name to search for (supports fuzzy matching)'},
+				name: {type: 'string', description: 'Symbol name(s) to search for. Comma-separated for multi-search: "handleDelete,handleEdit". Supports fuzzy matching.'},
 				type: {
 					type: 'string',
 					description: 'Filter by symbol type',
@@ -956,6 +960,21 @@ export function createServer(): Server {
 											.join('\n')
 									: 'No hot files.';
 								break;
+							case 'modified': {
+								const modFiles = await getGitModifiedFiles(PROJECT_ROOT);
+								if (modFiles.size === 0) {
+									sectionText = 'No git-modified files.';
+								} else {
+									const modLines: string[] = [];
+									for (const mf of modFiles) {
+										const hf = context.hotFiles?.files.find((f) => f.file === mf);
+										const lineInfo = hf ? ` (${hf.lines}L)` : '';
+										modLines.push(`${mf}${lineInfo}`);
+									}
+									sectionText = `${modFiles.size} modified files:\n${modLines.join('\n')}`;
+								}
+								break;
+							}
 							case 'imports':
 								if (context.importGraph?.nodes.length) {
 									const lines: string[] = [];
@@ -1355,19 +1374,20 @@ export function createServer(): Server {
 				// ─── Smart File Reader Tools (v1.5.0) ───
 
 				case 'read_file_outline': {
-					const outlineArgs = args as {file: string};
+					const outlineArgs = args as {file: string; depth?: number};
 					if (!outlineArgs?.file) {
 						return {
 							content: [{type: 'text', text: 'Error: file is required.'}],
 							isError: true,
 						};
 					}
-					const outline = await getFileOutline(PROJECT_ROOT, outlineArgs.file);
+					const outline = await getFileOutline(PROJECT_ROOT, outlineArgs.file, outlineArgs.depth);
+					const depthNote = outlineArgs.depth === 1 ? ' (top-level only)' : '';
 					return {
 						content: [
 							{
 								type: 'text',
-								text: `[${outlineArgs.file}] ${outline.totalLines} lines, ${outline.symbols.length} symbols\n${outline.formatted}`,
+								text: `[${outlineArgs.file}] ${outline.totalLines} lines, ${outline.symbols.length} symbols${depthNote}\n${outline.formatted}`,
 							},
 						],
 					};

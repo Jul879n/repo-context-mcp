@@ -92,9 +92,16 @@ export async function analyzeProject(
 		// Add modified files that aren't already hot
 		for (const mf of modifiedFiles) {
 			if (!existingPaths.has(mf)) {
+				let lineCount = 0;
+				try {
+					const content = await fs.readFile(path.join(projectRoot, mf), 'utf-8');
+					lineCount = content.split('\n').length;
+				} catch {
+					// ignore unreadable files
+				}
 				hotFiles.files.unshift({
 					file: mf,
-					lines: 0,
+					lines: lineCount,
 					reason: 'modified',
 				});
 			}
@@ -230,7 +237,7 @@ async function getProjectVersion(
 	return undefined;
 }
 
-async function getGitModifiedFiles(projectRoot: string): Promise<Set<string>> {
+export async function getGitModifiedFiles(projectRoot: string): Promise<Set<string>> {
 	try {
 		const {stdout} = await execFileAsync('git', ['diff', '--name-only', 'HEAD'], {
 			cwd: projectRoot,

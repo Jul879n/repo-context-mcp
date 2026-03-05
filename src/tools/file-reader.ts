@@ -554,21 +554,25 @@ function resolveFilePath(projectRoot: string, filePath: string): string {
 /**
  * Extract all symbols from a file with their line ranges.
  * Returns a compact representation: name(params):type L45-L89
+ * @param depth - If 1, only return top-level symbols (not nested inside others).
  */
 export async function getFileOutline(
 	projectRoot: string,
-	filePath: string
+	filePath: string,
+	depth?: number
 ): Promise<{symbols: FileSymbol[]; totalLines: number; formatted: string}> {
 	const fullPath = resolveFilePath(projectRoot, filePath);
 
-	// Check outline cache first
-	const cachedOutline = getCachedOutline(fullPath);
-	if (cachedOutline) {
-		return {
-			symbols: cachedOutline.symbols,
-			totalLines: cachedOutline.totalLines,
-			formatted: cachedOutline.formatted,
-		};
+	// Check outline cache first (only for default depth)
+	if (!depth || depth <= 0) {
+		const cachedOutline = getCachedOutline(fullPath);
+		if (cachedOutline) {
+			return {
+				symbols: cachedOutline.symbols,
+				totalLines: cachedOutline.totalLines,
+				formatted: cachedOutline.formatted,
+			};
+		}
 	}
 
 	const {lines} = await getCachedFile(fullPath);
@@ -589,7 +593,20 @@ export async function getFileOutline(
 		}
 	}
 
-	const symbols = [...seen.values()].sort((a, b) => a.startLine - b.startLine);
+	let symbols = [...seen.values()].sort((a, b) => a.startLine - b.startLine);
+
+	// depth=1: filter to only top-level symbols (not contained within another symbol)
+	if (depth === 1) {
+		symbols = symbols.filter(
+			(sym) =>
+				!symbols.some(
+					(other) =>
+						other !== sym &&
+						other.startLine < sym.startLine &&
+						other.endLine >= sym.endLine
+				)
+		);
+	}
 
 	// Format compactly
 	const formatted = symbols
@@ -599,13 +616,15 @@ export async function getFileOutline(
 		})
 		.join('\n');
 
-	// Cache the result
-	outlineCache.set(fullPath, {
-		symbols,
-		totalLines,
-		formatted,
-		cachedAt: Date.now(),
-	});
+	// Cache the result (only for default depth to avoid stale depth-filtered cache)
+	if (!depth || depth <= 0) {
+		outlineCache.set(fullPath, {
+			symbols,
+			totalLines,
+			formatted,
+			cachedAt: Date.now(),
+		});
+	}
 
 	return {symbols, totalLines, formatted};
 }
@@ -772,15 +791,17 @@ export async function searchInProject(
 	projectRoot: string,
 	pattern: string,
 	filePattern?: string,
-	maxResults: number = 30,
+	maxResults?: number,
 	contextLines: number = 0,
 	maxDetailFiles: number = 0,
 	excludePattern?: string
 ): Promise<string> {
-	// max_results = max matches shown in detail per file (all files always listed)
-	const maxDetailPerFile = Math.max(1, Math.min(maxResults, 100));
 	// max_detail_files: 0 = summary only, N = top N files, -1 = all files (token-budgeted)
 	const showAllFiles = maxDetailFiles === -1;
+	// max_results = max matches shown in detail per file.
+	// Default: 5 when showing all files (to avoid token budget blowup), 30 otherwise.
+	const defaultMaxResults = showAllFiles ? 5 : 30;
+	const maxDetailPerFile = Math.max(1, Math.min(maxResults ?? defaultMaxResults, 100));
 	const maxFilesWithDetail = showAllFiles ? Infinity : Math.max(0, maxDetailFiles);
 
 	let regex: RegExp;
@@ -1425,13 +1446,29 @@ export async function getAllOutlines(
 /**
  * Search for a symbol across all project files.
  * Returns matching symbols with file, type, signature, and export status.
+ * Supports multiple names (comma-separated or array).
  */
 export async function searchSymbolInProject(
 	projectRoot: string,
-	symbolName: string,
+	symbolName: string | string[],
 	symbolType?: string,
 	exportedOnly?: boolean
 ): Promise<string> {
+	// Support multi-name: "handleDelete,handleEdit" or ["handleDelete", "handleEdit"]
+	const names: string[] = Array.isArray(symbolName)
+		? symbolName
+		: symbolName.includes(',')
+		? symbolName.split(',').map((n) => n.trim()).filter(Boolean)
+		: [symbolName];
+
+	if (names.length > 1) {
+		const results = await Promise.all(
+			names.map((n) => searchSymbolInProject(projectRoot, n, symbolType, exportedOnly))
+		);
+		return results.join('\n\n---\n\n');
+	}
+
+	const query = names[0];
 	const allOutlines = await getAllOutlines(projectRoot);
 
 	interface SymbolMatch {
@@ -1441,7 +1478,7 @@ export async function searchSymbolInProject(
 	}
 
 	const matches: SymbolMatch[] = [];
-	const lowerName = symbolName.toLowerCase();
+	const lowerName = query.toLowerCase();
 
 	for (const [file, {symbols}] of allOutlines) {
 		for (const sym of symbols) {
@@ -1451,7 +1488,7 @@ export async function searchSymbolInProject(
 			const symLower = sym.name.toLowerCase();
 
 			// Exact match
-			if (sym.name === symbolName) {
+			if (sym.name === query) {
 				matches.push({file, symbol: sym, score: 1.0});
 			}
 			// Case-insensitive exact
@@ -1464,7 +1501,7 @@ export async function searchSymbolInProject(
 			}
 			// Fuzzy similarity (only for names of similar length)
 			else if (Math.min(symLower.length, lowerName.length) >= 4) {
-				const score = similarity(symbolName, sym.name);
+				const score = similarity(query, sym.name);
 				if (score >= 0.7) {
 					matches.push({file, symbol: sym, score});
 				}
@@ -1473,22 +1510,26 @@ export async function searchSymbolInProject(
 	}
 
 	if (matches.length === 0) {
-		return `No symbols matching "${symbolName}" found in project.`;
+		return `No symbols matching "${query}" found in project.`;
 	}
 
 	// Sort by score desc, then by file
 	matches.sort((a, b) => b.score - a.score || a.file.localeCompare(b.file));
 
+	const hasExact = matches[0].score >= 0.95;
+
 	// Cap at 30 results
 	const shown = matches.slice(0, 30);
 	const lines: string[] = [];
-	lines.push(`${matches.length} symbol${matches.length > 1 ? 's' : ''} matching "${symbolName}":`);
+	const fuzzyNote = hasExact ? '' : ' (fuzzy — no exact match found)';
+	lines.push(`${matches.length} symbol${matches.length > 1 ? 's' : ''} matching "${query}"${fuzzyNote}:`);
 	lines.push('');
 
 	for (const m of shown) {
 		const exp = m.symbol.exported ? 'export ' : '';
+		const matchTag = m.score === 1.0 ? '' : m.score >= 0.95 ? ' ~ci' : m.score >= 0.7 && m.score < 0.8 ? ' ~sub' : ' ~fuzzy';
 		lines.push(
-			`${m.file}:${m.symbol.startLine} ${exp}[${m.symbol.type}] ${m.symbol.name} (L${m.symbol.startLine}-${m.symbol.endLine})`
+			`${m.file}:${m.symbol.startLine} ${exp}[${m.symbol.type}] ${m.symbol.name}${matchTag} (L${m.symbol.startLine}-${m.symbol.endLine})`
 		);
 	}
 
