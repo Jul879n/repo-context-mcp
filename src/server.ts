@@ -44,7 +44,7 @@ import {
 } from './detectors/index.js';
 
 // Get project root from environment or current directory
-const PROJECT_ROOT = process.env.REPO_CONTEXT_ROOT || process.cwd();
+const PROJECT_ROOT = process.env.REPOSYNAPSE_ROOT || process.cwd();
 
 // Output format type
 type OutputFormat = 'ultra' | 'compact' | 'normal' | 'minimal' | 'json';
@@ -127,12 +127,16 @@ const tools: Tool[] = [
 			properties: {
 				file: {
 					type: 'string',
-					description: 'Relative path to file',
+					description: 'Relative path to file (also accepts file_path)',
+				},
+				file_path: {
+					type: 'string',
+					description: 'Alias for file',
 				},
 				start_line: {type: 'number', description: 'Start line'},
 				end_line: {type: 'number', description: 'End line'},
 			},
-			required: ['file'],
+			required: [],
 		},
 	},
 	{
@@ -141,10 +145,11 @@ const tools: Tool[] = [
 		inputSchema: {
 			type: 'object',
 			properties: {
-				file: {type: 'string', description: 'Relative path'},
+				file: {type: 'string', description: 'Relative path (also accepts file_path)'},
+				file_path: {type: 'string', description: 'Alias for file'},
 				depth: {type: 'number', description: 'Symbol depth: 1 = top-level only (no nested consts/functions). Reduces ~450t to ~80t for complex files.'},
 			},
-			required: ['file'],
+			required: [],
 		},
 	},
 	{
@@ -153,10 +158,11 @@ const tools: Tool[] = [
 		inputSchema: {
 			type: 'object',
 			properties: {
-				file: {type: 'string', description: 'Relative path'},
+				file: {type: 'string', description: 'Relative path (also accepts file_path)'},
+				file_path: {type: 'string', description: 'Alias for file'},
 				symbol: {type: 'string', description: 'Symbol name'},
 			},
-			required: ['file', 'symbol'],
+			required: ['symbol'],
 		},
 	},
 	{
@@ -165,12 +171,13 @@ const tools: Tool[] = [
 		inputSchema: {
 			type: 'object',
 			properties: {
-				file: {type: 'string', description: 'Relative path'},
+				file: {type: 'string', description: 'Relative path (also accepts file_path)'},
+				file_path: {type: 'string', description: 'Alias for file'},
 				pattern: {type: 'string', description: 'Pattern (string/regex)'},
 				context_lines: {type: 'number', description: 'Context lines (default: 2)'},
 				max_matches: {type: 'number', description: 'Max matches (default: 50)'},
 			},
-			required: ['file', 'pattern'],
+			required: ['pattern'],
 		},
 	},
 	{
@@ -219,7 +226,7 @@ const tools: Tool[] = [
 	},
 	{
 		name: 'generate_project_docs',
-		description: 'Regenerate .repo-context/ docs. Usually automatic.',
+		description: 'Regenerate .reposynapse/ docs. Usually automatic.',
 		inputSchema: {
 			type: 'object',
 			properties: {},
@@ -291,68 +298,68 @@ function getPrompts(): Prompt[] {
 function getResources(): Resource[] {
 	return [
 		{
-			uri: 'repo://context/summary',
+			uri: 'reposynapse://context/summary',
 			name: 'Project Summary',
 			description:
 				'Ultra-compact project summary (~50 tokens). Embed this for instant context.',
 			mimeType: 'text/plain',
 		},
 		{
-			uri: 'repo://context/full',
+			uri: 'reposynapse://context/full',
 			name: 'Full Project Context',
 			description: 'Complete project analysis in compact format.',
 			mimeType: 'text/plain',
 		},
 		{
-			uri: 'repo://context/stack',
+			uri: 'reposynapse://context/stack',
 			name: 'Tech Stack',
 			description: 'Languages, frameworks, and dependencies.',
 			mimeType: 'text/plain',
 		},
 		{
-			uri: 'repo://context/structure',
+			uri: 'reposynapse://context/structure',
 			name: 'Project Structure',
 			description: 'Folder layout and entry points.',
 			mimeType: 'text/plain',
 		},
 		{
-			uri: 'repo://context/api',
+			uri: 'reposynapse://context/api',
 			name: 'API Endpoints',
 			description: 'REST/GraphQL endpoints if detected.',
 			mimeType: 'text/plain',
 		},
 		{
-			uri: 'repo://context/models',
+			uri: 'reposynapse://context/models',
 			name: 'Data Models',
 			description: 'Schemas, types, and interfaces.',
 			mimeType: 'text/plain',
 		},
 		{
-			uri: 'repo://context/hotfiles',
+			uri: 'reposynapse://context/hotfiles',
 			name: 'Hot Files',
 			description: 'Large/complex files that need special attention.',
 			mimeType: 'text/plain',
 		},
 		{
-			uri: 'repo://context/annotations',
+			uri: 'reposynapse://context/annotations',
 			name: 'Project Annotations',
 			description: 'Human-written business rules, gotchas, and warnings.',
 			mimeType: 'text/plain',
 		},
 		{
-			uri: 'repo://context/imports',
+			uri: 'reposynapse://context/imports',
 			name: 'Import Graph',
 			description: 'Internal dependency graph: hub files, orphan files.',
 			mimeType: 'text/plain',
 		},
 		{
-			uri: 'repo://context.json',
+			uri: 'reposynapse://context.json',
 			name: 'Project Context (JSON)',
 			description: 'Full context in JSON format for programmatic use.',
 			mimeType: 'application/json',
 		},
 		{
-			uri: 'repo://context/outlines',
+			uri: 'reposynapse://context/outlines',
 			name: 'File Outlines',
 			description:
 				'All source file outlines: functions, classes, interfaces with line ranges. Use to navigate large files.',
@@ -580,7 +587,7 @@ function formatContextNormal(context: ProjectContext): string {
 export function createServer(): Server {
 	const server = new Server(
 		{
-			name: 'repo-context-mcp',
+			name: 'reposynapse',
 			version: '1.5.3',
 		},
 		{
@@ -712,13 +719,13 @@ export function createServer(): Server {
 			let mimeType = 'text/plain';
 
 			switch (uri) {
-				case 'repo://context/summary':
+				case 'reposynapse://context/summary':
 					content = formatMinimal(context);
 					break;
-				case 'repo://context/full':
+				case 'reposynapse://context/full':
 					content = formatCompact(context);
 					break;
-				case 'repo://context/stack':
+				case 'reposynapse://context/stack':
 					content = [
 						`Stack: ${context.stack.primaryLanguage}`,
 						context.stack.frameworks.length > 0
@@ -733,14 +740,14 @@ export function createServer(): Server {
 						.filter(Boolean)
 						.join('\n');
 					break;
-				case 'repo://context/structure':
+				case 'reposynapse://context/structure':
 					content = [
 						`Entry: ${context.structure.entryPoints.join(', ')}`,
 						`Folders: ${context.structure.folders.map((f) => f.path).join(', ')}`,
 						`Config: ${context.structure.configFiles.join(', ')}`,
 					].join('\n');
 					break;
-				case 'repo://context/api':
+				case 'reposynapse://context/api':
 					if (context.endpoints && context.endpoints.endpoints.length > 0) {
 						content = context.endpoints.endpoints
 							.map((e) => `${e.method} ${e.path} → ${e.file}:${e.line}`)
@@ -749,7 +756,7 @@ export function createServer(): Server {
 						content = 'No API endpoints detected';
 					}
 					break;
-				case 'repo://context/models':
+				case 'reposynapse://context/models':
 					if (context.models && context.models.models.length > 0) {
 						content = context.models.models
 							.map(
@@ -761,7 +768,7 @@ export function createServer(): Server {
 						content = 'No data models detected';
 					}
 					break;
-				case 'repo://context/hotfiles':
+				case 'reposynapse://context/hotfiles':
 					if (context.hotFiles && context.hotFiles.files.length > 0) {
 						content = context.hotFiles.files
 							.map((f) => `${f.file} (${f.lines}L) - ${f.reason}`)
@@ -770,12 +777,12 @@ export function createServer(): Server {
 						content = 'No hot files detected';
 					}
 					break;
-				case 'repo://context/annotations': {
+				case 'reposynapse://context/annotations': {
 					const annots = await readAnnotations(PROJECT_ROOT);
 					content = formatAnnotations(annots);
 					break;
 				}
-				case 'repo://context/imports':
+				case 'reposynapse://context/imports':
 					if (context.importGraph && context.importGraph.nodes.length > 0) {
 						const lines: string[] = [];
 						if (context.importGraph.mostImported.length > 0) {
@@ -796,11 +803,11 @@ export function createServer(): Server {
 						content = 'No significant import graph detected';
 					}
 					break;
-				case 'repo://context.json':
+				case 'reposynapse://context.json':
 					content = JSON.stringify(context, null, 2);
 					mimeType = 'application/json';
 					break;
-				case 'repo://context/outlines': {
+				case 'reposynapse://context/outlines': {
 					const {getAllOutlines} = await import('./tools/file-reader.js');
 					const allOutlines = await getAllOutlines(PROJECT_ROOT);
 					const outlineLines: string[] = [];
@@ -1366,7 +1373,7 @@ export function createServer(): Server {
 					await generateDocs(PROJECT_ROOT);
 					return {
 						content: [
-							{type: 'text', text: 'Auto-docs regenerated in .repo-context/'},
+							{type: 'text', text: 'Auto-docs regenerated in .reposynapse/'},
 						],
 					};
 				}
@@ -1374,20 +1381,21 @@ export function createServer(): Server {
 				// ─── Smart File Reader Tools (v1.5.0) ───
 
 				case 'read_file_outline': {
-					const outlineArgs = args as {file: string; depth?: number};
-					if (!outlineArgs?.file) {
+					const outlineArgs = args as {file?: string; file_path?: string; depth?: number};
+					const outlineFile = outlineArgs?.file || outlineArgs?.file_path;
+					if (!outlineFile) {
 						return {
 							content: [{type: 'text', text: 'Error: file is required.'}],
 							isError: true,
 						};
 					}
-					const outline = await getFileOutline(PROJECT_ROOT, outlineArgs.file, outlineArgs.depth);
+					const outline = await getFileOutline(PROJECT_ROOT, outlineFile, outlineArgs.depth);
 					const depthNote = outlineArgs.depth === 1 ? ' (top-level only)' : '';
 					return {
 						content: [
 							{
 								type: 'text',
-								text: `[${outlineArgs.file}] ${outline.totalLines} lines, ${outline.symbols.length} symbols${depthNote}\n${outline.formatted}`,
+								text: `[${outlineFile}] ${outline.totalLines} lines, ${outline.symbols.length} symbols${depthNote}\n${outline.formatted}`,
 							},
 						],
 					};
@@ -1395,11 +1403,13 @@ export function createServer(): Server {
 
 				case 'read_file_lines': {
 					const linesArgs = args as {
-						file: string;
+						file?: string;
+						file_path?: string;
 						start_line: number;
 						end_line: number;
 					};
-					if (!linesArgs?.file || !linesArgs.start_line || !linesArgs.end_line) {
+					const linesFile = linesArgs?.file || linesArgs?.file_path;
+					if (!linesFile || !linesArgs.start_line || !linesArgs.end_line) {
 						return {
 							content: [
 								{
@@ -1412,7 +1422,7 @@ export function createServer(): Server {
 					}
 					const linesContent = await readFileLines(
 						PROJECT_ROOT,
-						linesArgs.file,
+						linesFile,
 						linesArgs.start_line,
 						linesArgs.end_line
 					);
@@ -1422,8 +1432,9 @@ export function createServer(): Server {
 				}
 
 				case 'read_file_symbol': {
-					const symArgs = args as {file: string; symbol: string};
-					if (!symArgs?.file || !symArgs?.symbol) {
+					const symArgs = args as {file?: string; file_path?: string; symbol: string};
+					const symFile = symArgs?.file || symArgs?.file_path;
+					if (!symFile || !symArgs?.symbol) {
 						return {
 							content: [{type: 'text', text: 'Error: file and symbol are required.'}],
 							isError: true,
@@ -1431,7 +1442,7 @@ export function createServer(): Server {
 					}
 					const symbolContent = await readFileSymbol(
 						PROJECT_ROOT,
-						symArgs.file,
+						symFile,
 						symArgs.symbol
 					);
 					return {
@@ -1441,12 +1452,14 @@ export function createServer(): Server {
 
 				case 'search_in_file': {
 					const searchArgs = args as {
-						file: string;
+						file?: string;
+						file_path?: string;
 						pattern: string;
 						context_lines?: number;
 						max_matches?: number;
 					};
-					if (!searchArgs?.file || !searchArgs?.pattern) {
+					const searchFile = searchArgs?.file || searchArgs?.file_path;
+					if (!searchFile || !searchArgs?.pattern) {
 						return {
 							content: [{type: 'text', text: 'Error: file and pattern are required.'}],
 							isError: true,
@@ -1454,7 +1467,7 @@ export function createServer(): Server {
 					}
 					const searchResult = await searchInFile(
 						PROJECT_ROOT,
-						searchArgs.file,
+						searchFile,
 						searchArgs.pattern,
 						searchArgs.context_lines,
 						searchArgs.max_matches
@@ -1536,11 +1549,13 @@ export function createServer(): Server {
 
 				case 'read_file': {
 					const rfArgs = args as {
-						file: string;
+						file?: string;
+						file_path?: string;
 						start_line?: number;
 						end_line?: number;
 					};
-					if (!rfArgs?.file) {
+					const rfFile = rfArgs?.file || rfArgs?.file_path;
+					if (!rfFile) {
 						return {
 							content: [{type: 'text', text: 'Error: file is required.'}],
 							isError: true,
@@ -1548,7 +1563,7 @@ export function createServer(): Server {
 					}
 					const readResult = await readFile(
 						PROJECT_ROOT,
-						rfArgs.file,
+						rfFile,
 						rfArgs.start_line,
 						rfArgs.end_line
 					);
@@ -1604,10 +1619,10 @@ export async function main(): Promise<void> {
 		const context = await getFullContext(PROJECT_ROOT);
 
 		// Log to stderr (visible to user, not consumed as tokens)
-		console.error(`\n[repo-context] Project loaded: ${context.name}`);
-		console.error(`[repo-context] Generating auto-docs...`);
+		console.error(`\n[reposynapse] Project loaded: ${context.name}`);
+		console.error(`[reposynapse] Generating auto-docs...`);
 
-		// Generate .repo-context/*.md files
+		// Generate .reposynapse/*.md files
 		await generateDocs(PROJECT_ROOT);
 
 		// Start file watcher for auto-updates
@@ -1618,7 +1633,7 @@ export async function main(): Promise<void> {
 			method: 'notifications/resources/list_changed',
 		});
 	} catch (error) {
-		console.error('[repo-context] Warning: Could not pre-load context:', error);
+		console.error('[reposynapse] Warning: Could not pre-load context:', error);
 	}
 
 	// Handle graceful shutdown

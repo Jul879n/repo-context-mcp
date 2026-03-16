@@ -1,5 +1,5 @@
 /**
- * Core types for repo-context-mcp
+ * Core types for reposynapse
  */
 
 // Supported languages

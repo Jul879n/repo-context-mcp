@@ -38,7 +38,7 @@ function ask(rl: readline.Interface, question: string): Promise<string> {
 function printBanner(): void {
 	console.log(`
 ${C.cyan}${C.bold}╔══════════════════════════════════════════════╗
-║       repo-context-mcp  ·  Setup Wizard      ║
+║       reposynapse  ·  Setup Wizard      ║
 ╚══════════════════════════════════════════════╝${C.reset}
 `);
 }
@@ -297,18 +297,18 @@ async function configureAll(rl: readline.Interface): Promise<void> {
 
 function autoMode(): void {
 	console.log(`
-${C.cyan}${C.bold}repo-context-mcp${C.reset} installed successfully! 🎉
+${C.cyan}${C.bold}reposynapse${C.reset} installed successfully! 🎉
 
 ${C.bold}Quick setup:${C.reset}
-  ${C.cyan}repo-context-setup${C.reset}         Interactive wizard
-  ${C.cyan}repo-context-mcp --setup${C.reset}   Same thing
+  ${C.cyan}reposynapse-setup${C.reset}         Interactive wizard
+  ${C.cyan}reposynapse --setup${C.reset}   Same thing
 
 ${C.bold}Or add manually to your IDE config:${C.reset}
   ${C.dim}{
     "mcpServers": {
-      "repo-context": {
+      "reposynapse": {
         "command": "npx",
-        "args": ["repo-context-mcp"]
+        "args": ["reposynapse"]
       }
     }
   }${C.reset}
@@ -327,14 +327,14 @@ async function main(): Promise<void> {
 	// Help
 	if (process.argv.includes('--help') || process.argv.includes('-h')) {
 		console.log(`
-Usage: repo-context-setup [options]
+Usage: reposynapse-setup [options]
 
 Options:
   --help, -h     Show this help
   --status       Show current config status (non-interactive)
   --auto         Show quick setup info (used by postinstall)
 
-Interactive wizard to configure repo-context-mcp in your IDEs and AI tools.
+Interactive wizard to configure reposynapse in your IDEs and AI tools.
 Supports: Claude Desktop, Cursor, Windsurf, VS Code, Cline, Zed, OpenCode, Codex, Antigravity
 `);
 		return;

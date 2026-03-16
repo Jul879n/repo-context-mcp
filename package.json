@@ -1,19 +1,19 @@
 {
-	"name": "repo-context-mcp",
-	"version": "1.8.0",
+	"name": "reposynapse",
+	"version": "1.8.1",
 	"description": "Universal MCP server that analyzes any codebase and provides structured context to AI assistants, saving tokens by eliminating redundant project exploration",
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
 	"bin": {
-		"repo-context-mcp": "bin/repo-context-mcp.js",
-		"repo-context-setup": "bin/repo-context-setup.js"
+		"reposynapse": "bin/reposynapse.js",
+		"reposynapse-setup": "bin/reposynapse-setup.js"
 	},
 	"scripts": {
 		"build": "tsc",
 		"dev": "tsc --watch",
 		"start": "node dist/index.js",
-		"setup": "node bin/repo-context-setup.js",
-		"postinstall": "node bin/repo-context-setup.js --auto || true",
+		"setup": "node bin/reposynapse-setup.js",
+		"postinstall": "node bin/reposynapse-setup.js --auto || true",
 		"prepublishOnly": "npm run build",
 		"test": "node --test tests/**/*.test.mjs tests/**/*.test.js"
 	},
@@ -33,12 +33,12 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/Jul879n/repo-context-mcp.git"
+		"url": "git+https://github.com/Jul879n/reposynapse.git"
 	},
 	"bugs": {
-		"url": "https://github.com/Jul879n/repo-context-mcp/issues"
+		"url": "https://github.com/Jul879n/reposynapse/issues"
 	},
-	"homepage": "https://github.com/Jul879n/repo-context-mcp#readme",
+	"homepage": "https://github.com/Jul879n/reposynapse#readme",
 	"engines": {
 		"node": ">=18.0.0"
 	},

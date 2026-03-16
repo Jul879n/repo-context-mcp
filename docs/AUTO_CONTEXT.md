@@ -1,6 +1,6 @@
 # Auto-Context Configuration
 
-This document explains how to configure your AI tool to automatically use repo-context-mcp.
+This document explains how to configure your AI tool to automatically use reposynapse.
 
 ## OpenCode
 
@@ -9,8 +9,8 @@ Add to your `opencode.json`:
 ```json
 {
   "mcp": {
-    "repo-context": {
-      "command": ["npx", "repo-context-mcp"],
+    "reposynapse": {
+      "command": ["npx", "reposynapse"],
       "enabled": true
     }
   }
@@ -26,9 +26,9 @@ Add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "repo-context": {
+    "reposynapse": {
       "command": "npx",
-      "args": ["repo-context-mcp"]
+      "args": ["reposynapse"]
     }
   }
 }
@@ -46,9 +46,9 @@ In Settings → MCP Servers:
 
 ```json
 {
-  "repo-context": {
+  "reposynapse": {
     "command": "npx",
-    "args": ["repo-context-mcp"]
+    "args": ["reposynapse"]
   }
 }
 ```
@@ -65,9 +65,9 @@ In Cline settings, MCP section:
 
 ```json
 {
-  "repo-context": {
+  "reposynapse": {
     "command": "npx",
-    "args": ["repo-context-mcp"]
+    "args": ["reposynapse"]
   }
 }
 ```
@@ -90,13 +90,13 @@ Use get_project_context to understand any project before making changes.
 | Method | Tokens per conversation |
 |--------|------------------------|
 | CLAUDE.md in every message | ~500 × N messages |
-| repo-context (once) | ~50-150 × 1 |
+| reposynapse (once) | ~50-150 × 1 |
 
 ## Verify It's Working
 
 When the MCP connects, you'll see in stderr:
 
 ```
-[repo-context] Project loaded: your-project-name
-[repo-context] your-project:typescript+express [src/lib/tests] entry:src/index.ts
+[reposynapse] Project loaded: your-project-name
+[reposynapse] your-project:typescript+express [src/lib/tests] entry:src/index.ts
 ```

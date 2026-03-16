@@ -2,7 +2,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import {Annotations} from '../types/index.js';
 
-const ANNOTATIONS_FILE = '.repo-context-notes.json';
+const ANNOTATIONS_FILE = '.reposynapse-notes.json';
 
 const EMPTY_ANNOTATIONS: Annotations = {
 	businessRules: [],
@@ -13,7 +13,7 @@ const EMPTY_ANNOTATIONS: Annotations = {
 type AnnotationCategory = keyof Annotations;
 
 /**
- * Read annotations from .repo-context-notes.json
+ * Read annotations from .reposynapse-notes.json
  */
 export async function readAnnotations(
 	projectRoot: string
@@ -38,7 +38,7 @@ export async function readAnnotations(
 }
 
 /**
- * Write annotations to .repo-context-notes.json
+ * Write annotations to .reposynapse-notes.json
  */
 async function writeAnnotations(
 	projectRoot: string,

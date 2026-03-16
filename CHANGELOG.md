@@ -62,11 +62,11 @@
 
 ## v1.4.0
 
-- Interactive setup wizard (`repo-context-setup`).
+- Interactive setup wizard (`reposynapse-setup`).
 - 9 IDEs supported.
 
 ## v1.3.0
 
-- Zero-token auto-docs (`.repo-context/`).
+- Zero-token auto-docs (`.reposynapse/`).
 - File watcher.
 - Hot files detection, import graph, annotations.

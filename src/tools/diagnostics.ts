@@ -298,7 +298,7 @@ export async function getDiagnostics(projectRoot: string): Promise<DiagnosticRes
 	}
 
 	const {config, command} = detected;
-	console.log(`[repo-context] Diagnostics [${config.language}]: ${command}`);
+	console.log(`[reposynapse] Diagnostics [${config.language}]: ${command}`);
 
 	let rawOutput = '';
 	try {

@@ -8,6 +8,6 @@ export { createServer, main } from './server.js';
 import { main } from './server.js';
 
 main().catch((error) => {
-  console.error('Failed to start repo-context-mcp server:', error);
+  console.error('Failed to start reposynapse server:', error);
   process.exit(1);
 });

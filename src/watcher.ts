@@ -21,7 +21,7 @@ const SKIP_DIRS = new Set([
 	'.svelte-kit',
 	'coverage',
 	'.cache',
-	'.repo-context', // Don't watch our own output
+	'.reposynapse', // Don't watch our own output
 ]);
 
 // Debounce timer
@@ -44,10 +44,10 @@ export function startWatcher(projectRoot: string): void {
 		if (debounceTimer) clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(async () => {
 			try {
-				console.error(`[repo-context] Changes detected, regenerating docs...`);
+				console.error(`[reposynapse] Changes detected, regenerating docs...`);
 				await generateDocs(projectRoot);
 			} catch (error) {
-				console.error(`[repo-context] Watcher error:`, error);
+				console.error(`[reposynapse] Watcher error:`, error);
 			}
 		}, DEBOUNCE_MS);
 	}
@@ -87,7 +87,7 @@ export function startWatcher(projectRoot: string): void {
 	}
 
 	console.error(
-		`[repo-context] File watcher started (${watchers.length} watchers, ${
+		`[reposynapse] File watcher started (${watchers.length} watchers, ${
 			DEBOUNCE_MS / 1000
 		}s debounce)`
 	);
@@ -113,7 +113,7 @@ function shouldIgnore(filename: string): boolean {
 	if (filename.startsWith('.')) return true;
 	if (filename.endsWith('.lock')) return true;
 	if (filename === 'package-lock.json') return true;
-	if (filename === '.repo-context.json') return true;
+	if (filename === '.reposynapse.json') return true;
 
 	// Ignore common non-source files
 	const ext = path.extname(filename).toLowerCase();

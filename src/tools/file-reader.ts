@@ -830,7 +830,7 @@ export async function searchInProject(
 		'.next',
 		'coverage',
 		'__pycache__',
-		'.repo-context',
+		'.reposynapse',
 	]);
 
 	const fileGlob = filePattern ? globToRegex(filePattern) : null;
@@ -1048,7 +1048,7 @@ export async function listFiles(
 		'.next',
 		'coverage',
 		'__pycache__',
-		'.repo-context',
+		'.reposynapse',
 	]);
 
 	const fileGlob = pattern ? globToRegex(pattern) : null;
@@ -1399,7 +1399,7 @@ export async function getAllOutlines(
 		'.nuxt',
 		'coverage',
 		'.cache',
-		'.repo-context',
+		'.reposynapse',
 	]);
 
 	async function scan(dir: string, depth = 0): Promise<void> {

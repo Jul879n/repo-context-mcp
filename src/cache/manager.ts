@@ -4,7 +4,7 @@ import * as crypto from 'crypto';
 import {CacheData, ProjectContext} from '../types/index.js';
 
 const CACHE_VERSION = '1.2.0';
-const CACHE_FILENAME = '.repo-context.json';
+const CACHE_FILENAME = '.reposynapse.json';
 
 // Default TTL: 1 hour (in milliseconds)
 const DEFAULT_TTL = 60 * 60 * 1000;

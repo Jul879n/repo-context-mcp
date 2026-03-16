@@ -55,7 +55,7 @@ export const TARGETS: TargetConfig[] = [
 		},
 		serverEntry: {
 			command: 'npx',
-			args: ['repo-context-mcp'],
+			args: ['reposynapse'],
 		},
 	},
 	{
@@ -74,7 +74,7 @@ export const TARGETS: TargetConfig[] = [
 		},
 		serverEntry: {
 			command: 'npx',
-			args: ['repo-context-mcp'],
+			args: ['reposynapse'],
 		},
 	},
 	{
@@ -85,7 +85,7 @@ export const TARGETS: TargetConfig[] = [
 		getPath: () => joinHome('.codeium', 'windsurf', 'mcp_config.json'),
 		serverEntry: {
 			command: 'npx',
-			args: ['repo-context-mcp'],
+			args: ['reposynapse'],
 		},
 	},
 	{
@@ -114,7 +114,7 @@ export const TARGETS: TargetConfig[] = [
 		serverEntry: {
 			type: 'stdio',
 			command: 'npx',
-			args: ['repo-context-mcp'],
+			args: ['reposynapse'],
 		},
 	},
 	{
@@ -143,7 +143,7 @@ export const TARGETS: TargetConfig[] = [
 		},
 		serverEntry: {
 			command: 'npx',
-			args: ['repo-context-mcp'],
+			args: ['reposynapse'],
 			disabled: false,
 		},
 	},
@@ -164,7 +164,7 @@ export const TARGETS: TargetConfig[] = [
 		serverEntry: {
 			command: {
 				path: 'npx',
-				args: ['repo-context-mcp'],
+				args: ['reposynapse'],
 			},
 		},
 	},
@@ -181,7 +181,7 @@ export const TARGETS: TargetConfig[] = [
 		},
 		serverEntry: {
 			command: 'npx',
-			args: ['repo-context-mcp'],
+			args: ['reposynapse'],
 		},
 	},
 	{
@@ -192,7 +192,7 @@ export const TARGETS: TargetConfig[] = [
 		getPath: () => joinHome('.codex', 'config.toml'),
 		serverEntry: {
 			command: 'npx',
-			args: ['repo-context-mcp'],
+			args: ['reposynapse'],
 		},
 	},
 	{
@@ -207,7 +207,7 @@ export const TARGETS: TargetConfig[] = [
 		},
 		serverEntry: {
 			command: 'npx',
-			args: ['repo-context-mcp'],
+			args: ['reposynapse'],
 		},
 	},
 ];
@@ -222,7 +222,7 @@ export interface TargetStatus {
 }
 
 /**
- * Detect which IDEs/AIs are installed and whether repo-context is already configured.
+ * Detect which IDEs/AIs are installed and whether reposynapse is already configured.
  */
 export function detectAll(): TargetStatus[] {
 	const platform = process.platform;
@@ -245,7 +245,7 @@ function isInstalled(target: TargetConfig, configPath: string): boolean {
 }
 
 /**
- * Check if repo-context-mcp is already configured in a target.
+ * Check if reposynapse is already configured in a target.
  */
 function isConfigured(target: TargetConfig, configPath: string): boolean {
 	if (!fs.existsSync(configPath)) return false;
@@ -253,23 +253,23 @@ function isConfigured(target: TargetConfig, configPath: string): boolean {
 	try {
 		if (target.format === 'toml') {
 			const content = fs.readFileSync(configPath, 'utf-8');
-			return content.includes('repo-context');
+			return content.includes('reposynapse');
 		}
 
 		const content = fs.readFileSync(configPath, 'utf-8');
 		const json = JSON.parse(content);
 
 		if (target.parentKey) {
-			return !!json[target.parentKey]?.[target.configKey]?.['repo-context'];
+			return !!json[target.parentKey]?.[target.configKey]?.['reposynapse'];
 		}
-		return !!json[target.configKey]?.['repo-context'];
+		return !!json[target.configKey]?.['reposynapse'];
 	} catch {
 		return false;
 	}
 }
 
 /**
- * List all targets where repo-context is currently configured.
+ * List all targets where reposynapse is currently configured.
  */
 export function listConfigured(): TargetStatus[] {
 	return detectAll().filter((s) => s.configured);

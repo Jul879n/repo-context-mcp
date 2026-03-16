@@ -12,7 +12,7 @@ export interface WriteResult {
 }
 
 /**
- * Write (or merge) the repo-context MCP server config into a target's config file.
+ * Write (or merge) the reposynapse MCP server config into a target's config file.
  */
 export function writeConfig(
 	status: TargetStatus,
@@ -40,7 +40,7 @@ export function writeConfig(
 }
 
 /**
- * Remove repo-context config from a target.
+ * Remove reposynapse config from a target.
  */
 export function removeConfig(status: TargetStatus): WriteResult {
 	const {target, configPath, configured} = status;
@@ -105,13 +105,13 @@ function writeJson(target: TargetConfig, configPath: string): WriteResult {
 			parent[target.configKey] = {};
 		}
 		const servers = parent[target.configKey] as Record<string, unknown>;
-		servers['repo-context'] = target.serverEntry;
+		servers['reposynapse'] = target.serverEntry;
 	} else {
 		if (!json[target.configKey] || typeof json[target.configKey] !== 'object') {
 			json[target.configKey] = {};
 		}
 		const servers = json[target.configKey] as Record<string, unknown>;
-		servers['repo-context'] = target.serverEntry;
+		servers['reposynapse'] = target.serverEntry;
 	}
 
 	fs.writeFileSync(configPath, JSON.stringify(json, null, '\t'), 'utf-8');
@@ -138,9 +138,9 @@ function removeFromJson(target: TargetConfig, configPath: string): WriteResult {
 	fs.copyFileSync(configPath, backupPath);
 
 	if (target.parentKey) {
-		delete json[target.parentKey]?.[target.configKey]?.['repo-context'];
+		delete json[target.parentKey]?.[target.configKey]?.['reposynapse'];
 	} else {
-		delete json[target.configKey]?.['repo-context'];
+		delete json[target.configKey]?.['reposynapse'];
 	}
 
 	fs.writeFileSync(configPath, JSON.stringify(json, null, '\t'), 'utf-8');
@@ -171,15 +171,15 @@ function writeToml(target: TargetConfig, configPath: string): WriteResult {
 		backupPath = configPath + '.bak';
 		fs.copyFileSync(configPath, backupPath);
 
-		// Remove existing repo-context block if present
-		content = content.replace(/\n?\[mcp_servers\.repo-context\][^\[]*/g, '');
+		// Remove existing reposynapse block if present
+		content = content.replace(/\n?\[mcp_servers\.reposynapse\][^\[]*/g, '');
 	}
 
 	// Append the TOML block
 	const tomlBlock = `
-[mcp_servers.repo-context]
+[mcp_servers.reposynapse]
 command = "npx"
-args = ["repo-context-mcp"]
+args = ["reposynapse"]
 `;
 
 	content = content.trimEnd() + '\n' + tomlBlock;
@@ -206,7 +206,7 @@ function removeFromToml(
 	fs.copyFileSync(configPath, backupPath);
 
 	let content = fs.readFileSync(configPath, 'utf-8');
-	content = content.replace(/\n?\[mcp_servers\.repo-context\][^\[]*/g, '');
+	content = content.replace(/\n?\[mcp_servers\.reposynapse\][^\[]*/g, '');
 	fs.writeFileSync(configPath, content.trimEnd() + '\n', 'utf-8');
 
 	return {

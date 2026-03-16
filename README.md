@@ -1,4 +1,4 @@
-# repo-context-mcp
+# reposynapse
 
 Universal MCP server that analyzes any codebase and provides structured context to AI assistants. Dynamic, accurate, and token-efficient.
 
@@ -18,25 +18,25 @@ See [CHANGELOG.md](./CHANGELOG.md) for previous versions.
 ### Automatic (recommended)
 
 ```bash
-npm install -g repo-context-mcp
+npm install -g reposynapse
 
 # Run the interactive setup wizard
-repo-context-setup
+reposynapse-setup
 ```
 
 The wizard will:
 
 1. Detect installed AI tools (Claude Desktop, Cursor, Windsurf, VS Code, Cline, Zed, OpenCode, Codex, Antigravity)
 2. Let you select which ones to configure
-3. Safely merge `repo-context` into their config files (backup created)
+3. Safely merge `reposynapse` into their config files (backup created)
 4. Show a summary of changes
 
 ```bash
 # Alternative: use the --setup flag
-repo-context-mcp --setup
+reposynapse --setup
 
 # Check current config status (non-interactive)
-repo-context-setup --status
+reposynapse-setup --status
 ```
 
 ### Manual Setup
@@ -46,9 +46,9 @@ repo-context-setup --status
 ```json
 {
 	"mcpServers": {
-		"repo-context": {
+		"reposynapse": {
 			"command": "npx",
-			"args": ["repo-context-mcp"]
+			"args": ["reposynapse"]
 		}
 	}
 }
@@ -59,10 +59,10 @@ repo-context-setup --status
 ```json
 {
 	"servers": {
-		"repo-context": {
+		"reposynapse": {
 			"type": "stdio",
 			"command": "npx",
-			"args": ["repo-context-mcp"]
+			"args": ["reposynapse"]
 		}
 	}
 }
@@ -126,7 +126,7 @@ annotate { "action": "remove", "category": "gotchas", "index": 0 }
 get_diagnostics                                     # Auto-detects language, runs checker, returns ONLY fatal errors
 
 # ─── Docs ───
-generate_project_docs                               # Force regenerate .repo-context/
+generate_project_docs                               # Force regenerate .reposynapse/
 ```
 
 ### Resources (Zero Token Cost!)
@@ -135,17 +135,17 @@ MCP Resources are automatically available to AI - no tool call needed:
 
 | Resource                     | Description                         |
 | ---------------------------- | ----------------------------------- |
-| `repo://context/summary`     | ~50 token summary                   |
-| `repo://context/full`        | Complete compact context            |
-| `repo://context/stack`       | Languages & frameworks              |
-| `repo://context/structure`   | Folders & entry points              |
-| `repo://context/api`         | API endpoints                       |
-| `repo://context/models`      | Data models                         |
-| `repo://context/hotfiles`    | Complex/oversized files             |
-| `repo://context/annotations` | Business rules & gotchas            |
-| `repo://context/imports`     | Internal dependency graph           |
-| `repo://context/outlines`    | All file outlines (symbols + lines) |
-| `repo://context.json`        | Full JSON (programmatic)            |
+| `reposynapse://context/summary`     | ~50 token summary                   |
+| `reposynapse://context/full`        | Complete compact context            |
+| `reposynapse://context/stack`       | Languages & frameworks              |
+| `reposynapse://context/structure`   | Folders & entry points              |
+| `reposynapse://context/api`         | API endpoints                       |
+| `reposynapse://context/models`      | Data models                         |
+| `reposynapse://context/hotfiles`    | Complex/oversized files             |
+| `reposynapse://context/annotations` | Business rules & gotchas            |
+| `reposynapse://context/imports`     | Internal dependency graph           |
+| `reposynapse://context/outlines`    | All file outlines (symbols + lines) |
+| `reposynapse://context.json`        | Full JSON (programmatic)            |
 
 ## Output Formats
 
@@ -207,11 +207,11 @@ Status: tests:25 | docker | ci:github | todos:3
 
 ## Zero-Token Auto-Docs (v1.3.0)
 
-On startup, the MCP generates a `.repo-context/` directory with rich markdown docs:
+On startup, the MCP generates a `.reposynapse/` directory with rich markdown docs:
 
 ```
 your-project/
-├── .repo-context/
+├── .reposynapse/
 │   ├── ARCHITECTURE.md     ← Stack, frameworks, deps, patterns
 │   ├── COMPONENTS.md       ← Folders, entry points, hot files, endpoints
 │   ├── MODELS.md           ← All data models with fields
@@ -259,7 +259,7 @@ list_annotations
 remove_annotation { "category": "gotchas", "index": 0 }
 ```
 
-Annotations are persisted in `.repo-context-notes.json` and included in all context formats.
+Annotations are persisted in `.reposynapse-notes.json` and included in all context formats.
 
 ## Smart Caching
 
@@ -267,7 +267,7 @@ Annotations are persisted in `.repo-context-notes.json` and included in all cont
 - **Disk cache**: 1h TTL with file hash validation
 - **Auto-invalidate**: When config files change (package.json, etc.)
 
-The cache file `.repo-context.json` is stored in your project root. Add to `.gitignore`.
+The cache file `.reposynapse.json` is stored in your project root. Add to `.gitignore`.
 
 ## Supported Languages
 
@@ -300,13 +300,13 @@ The cache file `.repo-context.json` is stored in your project root. Add to `.git
 
 | Variable            | Description           | Default         |
 | ------------------- | --------------------- | --------------- |
-| `REPO_CONTEXT_ROOT` | Project root override | `process.cwd()` |
+| `REPOSYNAPSE_ROOT` | Project root override | `process.cwd()` |
 
 ## Contributing
 
 ```bash
-git clone https://github.com/anomalyco/repo-context-mcp
-cd repo-context-mcp
+git clone https://github.com/Jul879n/reposynapse
+cd reposynapse
 npm install
 npm run build
 ```
