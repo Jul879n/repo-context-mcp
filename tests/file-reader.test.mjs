@@ -196,7 +196,8 @@ describe('file-reader tools v1.6.0', async () => {
 				1,
 				3
 			);
-			assert.ok(result.includes('Lines 1-3'));
+			// Output format: "L1-3/N\n1: ...\n2: ...\n3: ..."
+			assert.ok(result.includes('L1-3/'), `Expected L1-3/ in: ${result}`);
 			assert.ok(result.includes('greet'));
 		});
 
@@ -207,7 +208,8 @@ describe('file-reader tools v1.6.0', async () => {
 				1,
 				999
 			);
-			assert.ok(result.includes('Lines 1-200'));
+			// Output format for large ranges: "[file] L1-200 of N\n..."
+			assert.ok(result.includes('L1-200'), `Expected L1-200 in: ${result}`);
 		});
 	});
 
@@ -540,7 +542,8 @@ describe('file-reader tools v1.6.0', async () => {
 
 		it('should read specific range when lines given', async () => {
 			const result = await readFile(PROJECT_ROOT, 'tests/_temp/small.ts', 1, 3);
-			assert.ok(result.includes('Lines 1-3'));
+			// Output format: "L1-3/N\n1: ...\n2: ...\n3: ..."
+			assert.ok(result.includes('L1-3/'), `Expected L1-3/ in: ${result}`);
 			assert.ok(result.includes('greet'));
 		});
 	});

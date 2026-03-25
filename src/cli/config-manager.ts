@@ -171,17 +171,17 @@ export const TARGETS: TargetConfig[] = [
 	{
 		id: 'opencode',
 		name: 'OpenCode',
-		configKey: 'mcpServers',
-		parentKey: 'mcp',
+		configKey: 'mcp',
 		format: 'json',
 		getPath: (platform) => {
 			if (platform === 'win32')
-				return joinHome('.config', 'opencode', 'opencode.json');
-			return joinHome('.config', 'opencode', 'opencode.json');
+				return joinHome('.config', 'opencode', 'opencode.jsonc');
+			return joinHome('.config', 'opencode', 'opencode.jsonc');
 		},
 		serverEntry: {
-			command: 'npx',
-			args: ['reposynapse'],
+			type: 'local',
+			command: ['reposynapse'],
+			enabled: true,
 		},
 	},
 	{

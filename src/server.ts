@@ -7,9 +7,6 @@ import {
 	ReadResourceRequestSchema,
 	ListPromptsRequestSchema,
 	GetPromptRequestSchema,
-	Tool,
-	Resource,
-	Prompt,
 } from '@modelcontextprotocol/sdk/types.js';
 import {
 	getFullContext,
@@ -26,15 +23,17 @@ import {
 	readFile,
 	getDiagnostics,
 	searchSymbolInProject,
+	getComplexityReport,
+	patchFile,
+	replaceSymbol,
+	insertAfterSymbol,
+	batchRename,
+	addImport,
+	removeDeadCode,
 } from './tools/index.js';
 import {ProjectContext} from './types/index.js';
 import {startWatcher} from './watcher.js';
-import {
-	formatUltraCompact,
-	formatCompact,
-	formatMinimal,
-	formatJSON,
-} from './formatters/index.js';
+import {formatCompact, formatMinimal} from './formatters/index.js';
 import {
 	formatImportGraphMermaid,
 	readAnnotations,
@@ -42,546 +41,12 @@ import {
 	removeAnnotation,
 	formatAnnotations,
 } from './detectors/index.js';
+import {tools} from './server/tool-definitions.js';
+import {getPrompts, getResources} from './server/definitions.js';
+import {OutputFormat, formatByType} from './server/formatters.js';
 
 // Get project root from environment or current directory
 const PROJECT_ROOT = process.env.REPOSYNAPSE_ROOT || process.cwd();
-
-// Output format type
-type OutputFormat = 'ultra' | 'compact' | 'normal' | 'minimal' | 'json';
-
-// Define available tools - OPTIMIZED: only non-redundant tools exposed (21→10)
-// Removed tools still work via handlers for backward compatibility,
-// but are NOT listed = ~880 fewer tokens per API message.
-const tools: Tool[] = [
-	{
-		name: 'get_project_context',
-		description:
-			'Call FIRST. Returns project context. Use section param for specific info.',
-		inputSchema: {
-			type: 'object',
-			properties: {
-				format: {
-					type: 'string',
-					enum: ['ultra', 'compact', 'normal', 'minimal', 'json'],
-					description: 'Output format (default: compact)',
-				},
-				section: {
-					type: 'string',
-					enum: [
-						'all',
-						'stack',
-						'structure',
-						'endpoints',
-						'models',
-						'status',
-						'hotfiles',
-						'modified',
-						'imports',
-						'annotations',
-					],
-					description: 'Specific section (default: all). Use "modified" for git-modified files only.',
-				},
-				force_refresh: {
-					type: 'boolean',
-					description: 'Force re-analysis',
-				},
-			},
-			required: [],
-		},
-	},
-	{
-		name: 'annotate',
-		description:
-			'Add/remove/list project annotations (business rules, gotchas, warnings).',
-		inputSchema: {
-			type: 'object',
-			properties: {
-				action: {
-					type: 'string',
-					enum: ['list', 'add', 'remove'],
-					description: 'Action to perform',
-				},
-				category: {
-					type: 'string',
-					enum: ['businessRules', 'gotchas', 'warnings'],
-					description: 'Category (required for add/remove)',
-				},
-				text: {
-					type: 'string',
-					description: 'Text to add (required for add)',
-				},
-				index: {
-					type: 'number',
-					description: 'Index to remove (required for remove)',
-				},
-			},
-			required: ['action'],
-		},
-	},
-	{
-		name: 'read_file',
-		description:
-			'Smart reader. <200L: full content. >200L: outline. Optional line range.',
-		inputSchema: {
-			type: 'object',
-			properties: {
-				file: {
-					type: 'string',
-					description: 'Relative path to file (also accepts file_path)',
-				},
-				file_path: {
-					type: 'string',
-					description: 'Alias for file',
-				},
-				start_line: {type: 'number', description: 'Start line'},
-				end_line: {type: 'number', description: 'End line'},
-			},
-			required: [],
-		},
-	},
-	{
-		name: 'read_file_outline',
-		description: 'File outline: symbols with line ranges (~100 tokens). Use depth=1 for top-level only (~80t vs ~450t on complex files).',
-		inputSchema: {
-			type: 'object',
-			properties: {
-				file: {type: 'string', description: 'Relative path (also accepts file_path)'},
-				file_path: {type: 'string', description: 'Alias for file'},
-				depth: {type: 'number', description: 'Symbol depth: 1 = top-level only (no nested consts/functions). Reduces ~450t to ~80t for complex files.'},
-			},
-			required: [],
-		},
-	},
-	{
-		name: 'read_file_symbol',
-		description: 'Read function/class by name. Fuzzy matching supported.',
-		inputSchema: {
-			type: 'object',
-			properties: {
-				file: {type: 'string', description: 'Relative path (also accepts file_path)'},
-				file_path: {type: 'string', description: 'Alias for file'},
-				symbol: {type: 'string', description: 'Symbol name'},
-			},
-			required: ['symbol'],
-		},
-	},
-	{
-		name: 'search_in_file',
-		description: 'Search pattern in file. Regex supported.',
-		inputSchema: {
-			type: 'object',
-			properties: {
-				file: {type: 'string', description: 'Relative path (also accepts file_path)'},
-				file_path: {type: 'string', description: 'Alias for file'},
-				pattern: {type: 'string', description: 'Pattern (string/regex)'},
-				context_lines: {type: 'number', description: 'Context lines (default: 2)'},
-				max_matches: {type: 'number', description: 'Max matches (default: 50)'},
-			},
-			required: ['pattern'],
-		},
-	},
-	{
-		name: 'search_in_project',
-		description:
-			'Search across all project files. Default: 1-line compact output — total matches, file count, top 10 hottest files. Use max_files=N for code detail on N files. Use max_files=-1 with file_pattern to get all matching files grouped and sorted (replaces grep).',
-		inputSchema: {
-			type: 'object',
-			properties: {
-				pattern: {type: 'string', description: 'Pattern (string/regex)'},
-				file_pattern: {
-					type: 'string',
-					description: 'Glob filter. Supports multi-glob: "*.ts,*.tsx" or brace expansion "*.{ts,tsx}". With max_files=-1 acts as grep replacement',
-				},
-				max_results: {
-					type: 'number',
-					description: 'Max matches shown per file in detail (default: 30)',
-				},
-				context_lines: {type: 'number', description: 'Context lines around each match (default: 0)'},
-				max_files: {
-					type: 'number',
-					description:
-						'Files to show code detail for (default: 0 = compact summary only). Use max_files=5 to see code. Use max_files=-1 with file_pattern to show ALL matching files grouped by file, sorted by match count — respects .gitignore, skips binaries.',
-				},
-				exclude_pattern: {
-					type: 'string',
-					description:
-						'Glob pattern to exclude files (e.g. "*.md", "docs/**"). Comma-separated for multiple patterns.',
-				},
-			},
-			required: ['pattern'],
-		},
-	},
-	{
-		name: 'list_files',
-		description: 'List files/dirs. Respects .gitignore.',
-		inputSchema: {
-			type: 'object',
-			properties: {
-				path: {type: 'string', description: 'Dir path (default: root)'},
-				pattern: {type: 'string', description: 'Glob filter'},
-				max_depth: {type: 'number', description: 'Depth (default: 3)'},
-			},
-			required: [],
-		},
-	},
-	{
-		name: 'generate_project_docs',
-		description: 'Regenerate .reposynapse/ docs. Usually automatic.',
-		inputSchema: {
-			type: 'object',
-			properties: {},
-			required: [],
-		},
-	},
-	{
-		name: 'get_diagnostics',
-		description:
-			'Run project diagnostics and return ONLY fatal errors. Auto-detects language (TypeScript, Rust, Go, Python, .NET, Java, Ruby, Swift, PHP) and runs the appropriate checker. Spelling errors and warnings are filtered out to save tokens.',
-		inputSchema: {
-			type: 'object',
-			properties: {},
-			required: [],
-		},
-	},
-	{
-		name: 'search_symbol',
-		description:
-			'Search for a symbol (function, class, interface, type, const, enum) across ALL project files. Returns file location, type, signature, and exported status. Fuzzy matching supported.',
-		inputSchema: {
-			type: 'object',
-			properties: {
-				name: {type: 'string', description: 'Symbol name(s) to search for. Comma-separated for multi-search: "handleDelete,handleEdit". Supports fuzzy matching.'},
-				type: {
-					type: 'string',
-					description: 'Filter by symbol type',
-					enum: ['function', 'class', 'interface', 'type', 'const', 'enum', 'method', 'export'],
-				},
-				exported_only: {
-					type: 'boolean',
-					description: 'Only return exported symbols (default: false)',
-				},
-			},
-			required: ['name'],
-		},
-	},
-];
-
-// Define MCP Prompts - These inject context WITHOUT tool calls!
-// The context becomes part of the system prompt = 0 extra tokens per message
-function getPrompts(): Prompt[] {
-	return [
-		{
-			name: 'project-context',
-			description: 'Injects project context into conversation. Use at start.',
-			arguments: [
-				{
-					name: 'format',
-					description: 'Output format: minimal, ultra, compact (default)',
-					required: false,
-				},
-			],
-		},
-		{
-			name: 'project-summary',
-			description: 'Ultra-minimal project summary (~50 tokens)',
-		},
-		{
-			name: 'file-reader-guide',
-			description:
-				'Injects instructions for efficient file reading. Use for large files.',
-		},
-	];
-}
-
-// Define MCP Resources - These are FREE (no tool call tokens!)
-// Resources can be embedded directly into context without explicit tool calls
-function getResources(): Resource[] {
-	return [
-		{
-			uri: 'reposynapse://context/summary',
-			name: 'Project Summary',
-			description:
-				'Ultra-compact project summary (~50 tokens). Embed this for instant context.',
-			mimeType: 'text/plain',
-		},
-		{
-			uri: 'reposynapse://context/full',
-			name: 'Full Project Context',
-			description: 'Complete project analysis in compact format.',
-			mimeType: 'text/plain',
-		},
-		{
-			uri: 'reposynapse://context/stack',
-			name: 'Tech Stack',
-			description: 'Languages, frameworks, and dependencies.',
-			mimeType: 'text/plain',
-		},
-		{
-			uri: 'reposynapse://context/structure',
-			name: 'Project Structure',
-			description: 'Folder layout and entry points.',
-			mimeType: 'text/plain',
-		},
-		{
-			uri: 'reposynapse://context/api',
-			name: 'API Endpoints',
-			description: 'REST/GraphQL endpoints if detected.',
-			mimeType: 'text/plain',
-		},
-		{
-			uri: 'reposynapse://context/models',
-			name: 'Data Models',
-			description: 'Schemas, types, and interfaces.',
-			mimeType: 'text/plain',
-		},
-		{
-			uri: 'reposynapse://context/hotfiles',
-			name: 'Hot Files',
-			description: 'Large/complex files that need special attention.',
-			mimeType: 'text/plain',
-		},
-		{
-			uri: 'reposynapse://context/annotations',
-			name: 'Project Annotations',
-			description: 'Human-written business rules, gotchas, and warnings.',
-			mimeType: 'text/plain',
-		},
-		{
-			uri: 'reposynapse://context/imports',
-			name: 'Import Graph',
-			description: 'Internal dependency graph: hub files, orphan files.',
-			mimeType: 'text/plain',
-		},
-		{
-			uri: 'reposynapse://context.json',
-			name: 'Project Context (JSON)',
-			description: 'Full context in JSON format for programmatic use.',
-			mimeType: 'application/json',
-		},
-		{
-			uri: 'reposynapse://context/outlines',
-			name: 'File Outlines',
-			description:
-				'All source file outlines: functions, classes, interfaces with line ranges. Use to navigate large files.',
-			mimeType: 'text/plain',
-		},
-	];
-}
-
-// Format context based on output format
-function formatByType(context: ProjectContext, format: OutputFormat): string {
-	switch (format) {
-		case 'ultra':
-			return formatUltraCompact(context);
-		case 'compact':
-			return formatCompact(context);
-		case 'minimal':
-			return formatMinimal(context);
-		case 'json':
-			return formatJSON(context);
-		case 'normal':
-		default:
-			return formatContextNormal(context);
-	}
-}
-
-// Original "normal" format (kept for backwards compatibility)
-function formatContextNormal(context: ProjectContext): string {
-	const sections: string[] = [];
-
-	// Header
-	sections.push(`# ${context.name}`);
-	if (context.description) {
-		sections.push(`\n${context.description}`);
-	}
-	if (context.version) {
-		sections.push(`\nVersion: ${context.version}`);
-	}
-
-	// Stack
-	sections.push(`\n## Tech Stack`);
-	sections.push(`- **Primary Language:** ${context.stack.primaryLanguage}`);
-	if (context.stack.languages.length > 1) {
-		sections.push(`- **All Languages:** ${context.stack.languages.join(', ')}`);
-	}
-	if (context.stack.frameworks.length > 0) {
-		const fwList = context.stack.frameworks
-			.map((f) => `${f.name}${f.version ? ` (${f.version})` : ''}`)
-			.join(', ');
-		sections.push(`- **Frameworks:** ${fwList}`);
-	}
-	if (context.stack.packageManager) {
-		sections.push(`- **Package Manager:** ${context.stack.packageManager}`);
-	}
-	if (context.stack.runtime) {
-		sections.push(`- **Runtime:** ${context.stack.runtime}`);
-	}
-
-	// Key dependencies (limit to 15)
-	const prodDeps = context.stack.dependencies.filter((d) => !d.dev).slice(0, 15);
-	if (prodDeps.length > 0) {
-		sections.push(`\n### Key Dependencies`);
-		for (const dep of prodDeps) {
-			sections.push(`- ${dep.name}: ${dep.version}`);
-		}
-	}
-
-	// Structure
-	sections.push(`\n## Project Structure`);
-	if (context.structure.entryPoints.length > 0) {
-		sections.push(`\n### Entry Points`);
-		for (const entry of context.structure.entryPoints) {
-			sections.push(`- ${entry}`);
-		}
-	}
-
-	sections.push(`\n### Folders`);
-	for (const folder of context.structure.folders.slice(0, 20)) {
-		sections.push(
-			`- **${folder.path}/** - ${folder.description} (${folder.fileCount} files)`
-		);
-	}
-
-	if (context.structure.configFiles.length > 0) {
-		sections.push(`\n### Config Files`);
-		sections.push(context.structure.configFiles.join(', '));
-	}
-
-	// Endpoints
-	if (context.endpoints && context.endpoints.endpoints.length > 0) {
-		sections.push(`\n## API Endpoints (${context.endpoints.type.toUpperCase()})`);
-		for (const ep of context.endpoints.endpoints.slice(0, 30)) {
-			sections.push(`- \`${ep.method} ${ep.path}\` → ${ep.file}:${ep.line}`);
-		}
-		if (context.endpoints.endpoints.length > 30) {
-			sections.push(
-				`\n... and ${context.endpoints.endpoints.length - 30} more endpoints`
-			);
-		}
-	}
-
-	// Models
-	if (context.models && context.models.models.length > 0) {
-		sections.push(`\n## Data Models`);
-		if (context.models.ormUsed) {
-			sections.push(`ORM: ${context.models.ormUsed}`);
-		}
-		for (const model of context.models.models.slice(0, 20)) {
-			const fields = model.fields
-				.slice(0, 5)
-				.map((f) => f.name)
-				.join(', ');
-			const moreFields =
-				model.fields.length > 5 ? `, +${model.fields.length - 5} more` : '';
-			sections.push(
-				`- **${model.name}** (${model.type}) → ${model.file}:${model.line}`
-			);
-			if (fields) {
-				sections.push(`  Fields: ${fields}${moreFields}`);
-			}
-		}
-		if (context.models.models.length > 20) {
-			sections.push(`\n... and ${context.models.models.length - 20} more models`);
-		}
-	}
-
-	// Architecture
-	sections.push(`\n## Architecture`);
-	sections.push(`- **Pattern:** ${context.architecture.pattern}`);
-	sections.push(`- ${context.architecture.description}`);
-	if (context.architecture.layers.length > 0) {
-		sections.push(`- **Layers:** ${context.architecture.layers.join(', ')}`);
-	}
-
-	// Status
-	sections.push(`\n## Project Status`);
-	sections.push(
-		`- **Documentation:** ${context.status.hasDocumentation ? 'Yes' : 'No'}`
-	);
-	sections.push(`- **Docker:** ${context.status.hasDocker ? 'Yes' : 'No'}`);
-	sections.push(
-		`- **CI/CD:** ${
-			context.status.hasCI ? `Yes (${context.status.ciPlatform})` : 'No'
-		}`
-	);
-	sections.push(
-		`- **Tests:** ${context.status.tests.testFiles} test files${
-			context.status.tests.framework ? ` (${context.status.tests.framework})` : ''
-		}`
-	);
-	sections.push(`- **TODOs:** ${context.status.todos.length} found`);
-
-	if (context.status.todos.length > 0) {
-		sections.push(`\n### Top TODOs`);
-		for (const todo of context.status.todos.slice(0, 5)) {
-			const priority =
-				todo.priority === 'high' ? '!' : todo.priority === 'medium' ? '-' : '.';
-			sections.push(`- ${priority} ${todo.text} (${todo.file}:${todo.line})`);
-		}
-	}
-
-	// Hot Files
-	if (context.hotFiles && context.hotFiles.files.length > 0) {
-		sections.push(`\n## ⚠ Hot Files (${context.hotFiles.files.length})`);
-		sections.push(
-			`*Thresholds: >${context.hotFiles.thresholds.lines} lines, >${context.hotFiles.thresholds.imports} imports*`
-		);
-		for (const hf of context.hotFiles.files.slice(0, 10)) {
-			const details: string[] = [`${hf.lines} lines`];
-			if (hf.imports) details.push(`${hf.imports} imports`);
-			if (hf.exports) details.push(`${hf.exports} exports`);
-			if (hf.todoCount) details.push(`${hf.todoCount} TODOs`);
-			sections.push(`- **${hf.file}** (${details.join(', ')}) [${hf.reason}]`);
-		}
-	}
-
-	// Import Graph
-	if (context.importGraph) {
-		sections.push(`\n## Import Graph`);
-		if (context.importGraph.mostImported.length > 0) {
-			sections.push(`\n### Hub Files (most imported)`);
-			for (const hub of context.importGraph.mostImported) {
-				const node = context.importGraph.nodes.find((n) => n.file === hub);
-				sections.push(
-					`- **${hub}** (imported by ${node?.importedBy || '?'} files)`
-				);
-			}
-		}
-		if (context.importGraph.orphans.length > 0) {
-			sections.push(`\n### Orphan Files (not imported by anyone)`);
-			for (const orphan of context.importGraph.orphans.slice(0, 10)) {
-				sections.push(`- ${orphan}`);
-			}
-		}
-	}
-
-	// Annotations
-	if (context.annotations) {
-		sections.push(`\n## Project Annotations`);
-		if (context.annotations.businessRules.length > 0) {
-			sections.push(`\n### 📋 Business Rules`);
-			for (const rule of context.annotations.businessRules) {
-				sections.push(`- ${rule}`);
-			}
-		}
-		if (context.annotations.gotchas.length > 0) {
-			sections.push(`\n### ⚠ Gotchas`);
-			for (const g of context.annotations.gotchas) {
-				sections.push(`- ${g}`);
-			}
-		}
-		if (context.annotations.warnings.length > 0) {
-			sections.push(`\n### 🔴 Warnings`);
-			for (const w of context.annotations.warnings) {
-				sections.push(`- ${w}`);
-			}
-		}
-	}
-
-	sections.push(`\n---\n*Analyzed at: ${context.analyzedAt}*`);
-
-	return sections.join('\n');
-}
 
 // Create and configure the server
 export function createServer(): Server {
@@ -1512,6 +977,8 @@ export function createServer(): Server {
 						name: string;
 						type?: string;
 						exported_only?: boolean;
+						context_filter?: {returns_type?: string; has_param_type?: string};
+						context_lines?: number;
 					};
 					if (!ssArgs?.name) {
 						return {
@@ -1523,11 +990,85 @@ export function createServer(): Server {
 						PROJECT_ROOT,
 						ssArgs.name,
 						ssArgs.type,
-						ssArgs.exported_only
+						ssArgs.exported_only,
+						ssArgs.context_filter,
+						ssArgs.context_lines
 					);
 					return {
 						content: [{type: 'text', text: symbolResult}],
 					};
+				}
+
+				case 'get_complexity': {
+					const gcArgs = args as {
+						file_pattern?: string;
+						min_lines?: number;
+						min_params?: number;
+					};
+					const complexityResult = await getComplexityReport(
+						PROJECT_ROOT,
+						gcArgs?.file_pattern,
+						gcArgs?.min_lines,
+						gcArgs?.min_params
+					);
+					return {
+						content: [{type: 'text', text: complexityResult}],
+					};
+				}
+
+				case 'patch_file': {
+					const pfArgs = args as {file?: string; file_path?: string; patch: string};
+					const pfFile = pfArgs?.file || pfArgs?.file_path;
+					if (!pfFile || !pfArgs?.patch) {
+						return {content: [{type: 'text', text: 'Error: file and patch are required.'}], isError: true};
+					}
+					const pfResult = await patchFile(PROJECT_ROOT, pfFile, pfArgs.patch);
+					return {content: [{type: 'text', text: pfResult}]};
+				}
+
+				case 'replace_symbol': {
+					const rsArgs = args as {file?: string; file_path?: string; symbol: string; new_body: string};
+					const rsFile = rsArgs?.file || rsArgs?.file_path;
+					if (!rsFile || !rsArgs?.symbol || rsArgs?.new_body === undefined) {
+						return {content: [{type: 'text', text: 'Error: file, symbol, and new_body are required.'}], isError: true};
+					}
+					const rsResult = await replaceSymbol(PROJECT_ROOT, rsFile, rsArgs.symbol, rsArgs.new_body);
+					return {content: [{type: 'text', text: rsResult}]};
+				}
+
+				case 'insert_after_symbol': {
+					const iaArgs = args as {file?: string; file_path?: string; symbol: string; code: string};
+					const iaFile = iaArgs?.file || iaArgs?.file_path;
+					if (!iaFile || !iaArgs?.symbol || iaArgs?.code === undefined) {
+						return {content: [{type: 'text', text: 'Error: file, symbol, and code are required.'}], isError: true};
+					}
+					const iaResult = await insertAfterSymbol(PROJECT_ROOT, iaFile, iaArgs.symbol, iaArgs.code);
+					return {content: [{type: 'text', text: iaResult}]};
+				}
+
+				case 'batch_rename': {
+					const brArgs = args as {old_name: string; new_name: string; file_pattern?: string};
+					if (!brArgs?.old_name || !brArgs?.new_name) {
+						return {content: [{type: 'text', text: 'Error: old_name and new_name are required.'}], isError: true};
+					}
+					const brResult = await batchRename(PROJECT_ROOT, brArgs.old_name, brArgs.new_name, brArgs.file_pattern);
+					return {content: [{type: 'text', text: brResult}]};
+				}
+
+				case 'add_import': {
+					const aiArgs = args as {file?: string; file_path?: string; import_statement: string};
+					const aiFile = aiArgs?.file || aiArgs?.file_path;
+					if (!aiFile || !aiArgs?.import_statement) {
+						return {content: [{type: 'text', text: 'Error: file and import_statement are required.'}], isError: true};
+					}
+					const aiResult = await addImport(PROJECT_ROOT, aiFile, aiArgs.import_statement);
+					return {content: [{type: 'text', text: aiResult}]};
+				}
+
+				case 'remove_dead_code': {
+					const rdArgs = args as {file_pattern?: string; dry_run?: boolean};
+					const rdResult = await removeDeadCode(PROJECT_ROOT, rdArgs?.file_pattern, rdArgs?.dry_run ?? true);
+					return {content: [{type: 'text', text: rdResult}]};
 				}
 
 				case 'list_files': {

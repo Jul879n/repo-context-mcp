@@ -43,7 +43,15 @@ async function getCachedFile(
 		}
 	}
 
-	const content = await fs.readFile(fullPath, 'utf-8');
+	let content: string;
+	try {
+		content = await fs.readFile(fullPath, 'utf-8');
+	} catch (err: unknown) {
+		if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+			throw new Error(`File not found: '${fullPath}'. Use list_files to browse available files.`);
+		}
+		throw err;
+	}
 	const lines = content.split('\n');
 	let mtime = 0;
 	try {
@@ -1448,11 +1456,48 @@ export async function getAllOutlines(
  * Returns matching symbols with file, type, signature, and export status.
  * Supports multiple names (comma-separated or array).
  */
+/**
+ * Check if a function signature matches the given context filter.
+ * - returns_type: string that must appear in the return type portion (after last `)`)
+ * - has_param_type: string that must appear in the params portion (between `(` and `)`)
+ */
+function signatureMatchesFilter(
+	sig: string,
+	filter: {returns_type?: string; has_param_type?: string}
+): boolean {
+	if (filter.returns_type) {
+		const lastParen = sig.lastIndexOf(')');
+		const returnPart = lastParen >= 0 ? sig.slice(lastParen) : sig;
+		if (!returnPart.toLowerCase().includes(filter.returns_type.toLowerCase())) return false;
+	}
+	if (filter.has_param_type) {
+		const openParen = sig.indexOf('(');
+		if (openParen < 0) return false;
+		let depth = 0;
+		let closeParen = -1;
+		for (let i = openParen; i < sig.length; i++) {
+			if (sig[i] === '(') depth++;
+			else if (sig[i] === ')') {
+				depth--;
+				if (depth === 0) {
+					closeParen = i;
+					break;
+				}
+			}
+		}
+		const paramPart = closeParen >= 0 ? sig.slice(openParen, closeParen + 1) : sig.slice(openParen);
+		if (!paramPart.toLowerCase().includes(filter.has_param_type.toLowerCase())) return false;
+	}
+	return true;
+}
+
 export async function searchSymbolInProject(
 	projectRoot: string,
 	symbolName: string | string[],
 	symbolType?: string,
-	exportedOnly?: boolean
+	exportedOnly?: boolean,
+	contextFilter?: {returns_type?: string; has_param_type?: string},
+	contextLines?: number
 ): Promise<string> {
 	// Support multi-name: "handleDelete,handleEdit" or ["handleDelete", "handleEdit"]
 	const names: string[] = Array.isArray(symbolName)
@@ -1463,7 +1508,7 @@ export async function searchSymbolInProject(
 
 	if (names.length > 1) {
 		const results = await Promise.all(
-			names.map((n) => searchSymbolInProject(projectRoot, n, symbolType, exportedOnly))
+			names.map((n) => searchSymbolInProject(projectRoot, n, symbolType, exportedOnly, contextFilter, contextLines))
 		);
 		return results.join('\n\n---\n\n');
 	}
@@ -1484,6 +1529,7 @@ export async function searchSymbolInProject(
 		for (const sym of symbols) {
 			if (symbolType && sym.type !== symbolType) continue;
 			if (exportedOnly && !sym.exported) continue;
+			if (contextFilter && !signatureMatchesFilter(sym.signature, contextFilter)) continue;
 
 			const symLower = sym.name.toLowerCase();
 
@@ -1531,6 +1577,15 @@ export async function searchSymbolInProject(
 		lines.push(
 			`${m.file}:${m.symbol.startLine} ${exp}[${m.symbol.type}] ${m.symbol.name}${matchTag} (L${m.symbol.startLine}-${m.symbol.endLine})`
 		);
+		if (contextLines && contextLines > 0) {
+			try {
+				const endCtx = Math.min(m.symbol.endLine, m.symbol.startLine + contextLines - 1);
+				const snippet = await readFileLines(projectRoot, m.file, m.symbol.startLine, endCtx);
+				lines.push(snippet);
+			} catch {
+				// skip context if file unreadable
+			}
+		}
 	}
 
 	if (matches.length > 30) {

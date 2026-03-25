@@ -17,3 +17,5 @@ export {
 	searchSymbolInProject,
 } from './file-reader.js';
 export {getDiagnostics} from './diagnostics.js';
+export {getComplexityReport} from './complexity.js';
+export {patchFile, replaceSymbol, insertAfterSymbol, batchRename, addImport, removeDeadCode} from './file-editor.js';

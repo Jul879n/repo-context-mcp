@@ -2,6 +2,22 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {TargetConfig, TargetStatus} from './config-manager.js';
 
+// ─── JSONC Support ────────────────────────────────────────────────────
+
+/**
+ * Strip JSONC comments and trailing commas so JSON.parse can handle them.
+ * Handles // line comments, /* block comments *\/, and trailing commas.
+ */
+function stripJsonc(raw: string): string {
+	return raw
+		// Remove block comments
+		.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+		// Remove line comments (but not URLs like https://)
+		.replace(/(?<![:"'])\/\/[^\n]*/g, '')
+		// Remove trailing commas before ] or }
+		.replace(/,(\s*[}\]])/g, '$1');
+}
+
 // ─── JSON Config Writing ──────────────────────────────────────────────
 
 export interface WriteResult {
@@ -77,7 +93,8 @@ function writeJson(target: TargetConfig, configPath: string): WriteResult {
 	if (fs.existsSync(configPath)) {
 		const raw = fs.readFileSync(configPath, 'utf-8');
 		try {
-			json = JSON.parse(raw);
+			const parseable = configPath.endsWith('.jsonc') ? stripJsonc(raw) : raw;
+			json = JSON.parse(parseable);
 		} catch {
 			// If unparseable, backup and start fresh
 			backupPath = configPath + '.bak';
