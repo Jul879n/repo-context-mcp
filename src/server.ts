@@ -979,6 +979,7 @@ export function createServer(): Server {
 						exported_only?: boolean;
 						context_filter?: {returns_type?: string; has_param_type?: string};
 						context_lines?: number;
+						path_filter?: string;
 					};
 					if (!ssArgs?.name) {
 						return {
@@ -992,7 +993,8 @@ export function createServer(): Server {
 						ssArgs.type,
 						ssArgs.exported_only,
 						ssArgs.context_filter,
-						ssArgs.context_lines
+						ssArgs.context_lines,
+						ssArgs.path_filter
 					);
 					return {
 						content: [{type: 'text', text: symbolResult}],

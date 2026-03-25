@@ -1,6 +1,6 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import {getFileOutline, getAllOutlines} from './file-reader.js';
+import {getFileOutline, getAllOutlines, invalidateFileCache} from './file-reader.js';
 
 // ─── SHARED UTILS ───
 
@@ -93,6 +93,7 @@ export async function patchFile(
 	}
 
 	await fs.writeFile(fullPath, lines.join('\n'), 'utf-8');
+	invalidateFileCache(fullPath);
 	const rel = path.relative(projectRoot, fullPath);
 	return `Patched ${rel}: ${hunks.length} hunk(s) applied.`;
 }
@@ -122,6 +123,7 @@ export async function replaceSymbol(
 
 	lines.splice(sym.startLine - 1, sym.endLine - sym.startLine + 1, ...newBody.split('\n'));
 	await fs.writeFile(fullPath, lines.join('\n'), 'utf-8');
+	invalidateFileCache(fullPath);
 
 	return `Replaced [${sym.type}] "${symbolName}" in ${filePath} (was L${sym.startLine}-${sym.endLine}, now ${newBody.split('\n').length} lines).`;
 }
@@ -152,6 +154,7 @@ export async function insertAfterSymbol(
 	// Insert after endLine (splice at endLine index since array is 0-based)
 	lines.splice(sym.endLine, 0, ...code.split('\n'));
 	await fs.writeFile(fullPath, lines.join('\n'), 'utf-8');
+	invalidateFileCache(fullPath);
 
 	return `Inserted ${code.split('\n').length} line(s) after [${sym.type}] "${symbolName}" (after L${sym.endLine}) in ${filePath}.`;
 }
@@ -196,6 +199,7 @@ export async function batchRename(
 				});
 				if (count > 0) {
 					await fs.writeFile(fullPath, newContent, 'utf-8');
+					invalidateFileCache(fullPath);
 					modified.push(`  ${relPath} (${count}×)`);
 					totalReplacements += count;
 				}
@@ -260,6 +264,7 @@ export async function addImport(
 	lines.splice(insertAt, 0, normalizedImport);
 
 	await fs.writeFile(fullPath, lines.join('\n'), 'utf-8');
+	invalidateFileCache(fullPath);
 	return `Added import to ${filePath} at line ${insertAt + 1}.`;
 }
 
@@ -351,6 +356,7 @@ export async function removeDeadCode(
 		}
 
 		await fs.writeFile(fullPath, lines.join('\n'), 'utf-8');
+		invalidateFileCache(fullPath);
 	}
 
 	return `Removed ${removed.length} dead exports:\n${removed.join('\n')}`;

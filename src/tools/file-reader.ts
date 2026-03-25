@@ -73,6 +73,15 @@ function getCachedOutline(fullPath: string): OutlineCacheEntry | null {
 	return null;
 }
 
+/**
+ * Invalidate in-memory caches for a specific file.
+ * Call after writing to a file to prevent stale reads.
+ */
+export function invalidateFileCache(fullPath: string): void {
+	fileCache.delete(fullPath);
+	outlineCache.delete(fullPath);
+}
+
 // ─── LINE-BY-LINE SYMBOL EXTRACTOR ───
 // Instead of multi-line regex, we scan each line for symbol definitions.
 // This handles indented code, arrow functions, export default, etc.
@@ -1153,6 +1162,11 @@ export async function readFile(
 
 // ─── HELPERS ───
 
+const REGEX_META = /[.*+?^${}()|[\]\\]/;
+function isRegexQuery(q: string): boolean {
+	return REGEX_META.test(q);
+}
+
 /**
  * Simple string similarity (0 to 1) based on longest common subsequence ratio.
  */
@@ -1497,7 +1511,8 @@ export async function searchSymbolInProject(
 	symbolType?: string,
 	exportedOnly?: boolean,
 	contextFilter?: {returns_type?: string; has_param_type?: string},
-	contextLines?: number
+	contextLines?: number,
+	pathFilter?: string
 ): Promise<string> {
 	// Support multi-name: "handleDelete,handleEdit" or ["handleDelete", "handleEdit"]
 	const names: string[] = Array.isArray(symbolName)
@@ -1508,13 +1523,31 @@ export async function searchSymbolInProject(
 
 	if (names.length > 1) {
 		const results = await Promise.all(
-			names.map((n) => searchSymbolInProject(projectRoot, n, symbolType, exportedOnly, contextFilter, contextLines))
+			names.map((n) => searchSymbolInProject(projectRoot, n, symbolType, exportedOnly, contextFilter, contextLines, pathFilter))
 		);
 		return results.join('\n\n---\n\n');
 	}
 
 	const query = names[0];
 	const allOutlines = await getAllOutlines(projectRoot);
+
+	// Filter by path if specified
+	let filteredOutlines = allOutlines;
+	if (pathFilter) {
+		filteredOutlines = new Map();
+		const patterns = pathFilter.split(',').map((p) => p.trim());
+		for (const [file, data] of allOutlines) {
+			if (patterns.some((p) => {
+				if (p.includes('*')) {
+					const regex = new RegExp('^' + p.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*') + '$');
+					return regex.test(file);
+				}
+				return file.includes(p);
+			})) {
+				filteredOutlines.set(file, data);
+			}
+		}
+	}
 
 	interface SymbolMatch {
 		file: string;
@@ -1524,32 +1557,50 @@ export async function searchSymbolInProject(
 
 	const matches: SymbolMatch[] = [];
 	const lowerName = query.toLowerCase();
+	const useRegex = isRegexQuery(query);
 
-	for (const [file, {symbols}] of allOutlines) {
+	// Pre-compile regex once; fall back to fuzzy if invalid
+	let queryRegex: RegExp | null = null;
+	if (useRegex) {
+		try {
+			queryRegex = new RegExp(query, 'i');
+		} catch {
+			// Invalid regex — fall back to fuzzy matching
+		}
+	}
+
+	for (const [file, {symbols}] of filteredOutlines) {
 		for (const sym of symbols) {
 			if (symbolType && sym.type !== symbolType) continue;
 			if (exportedOnly && !sym.exported) continue;
 			if (contextFilter && !signatureMatchesFilter(sym.signature, contextFilter)) continue;
 
-			const symLower = sym.name.toLowerCase();
+			if (queryRegex) {
+				// Regex matching mode
+				if (queryRegex.test(sym.name)) {
+					matches.push({file, symbol: sym, score: 0.85});
+				}
+			} else {
+				const symLower = sym.name.toLowerCase();
 
-			// Exact match
-			if (sym.name === query) {
-				matches.push({file, symbol: sym, score: 1.0});
-			}
-			// Case-insensitive exact
-			else if (symLower === lowerName) {
-				matches.push({file, symbol: sym, score: 0.95});
-			}
-			// Substring match (query contained in symbol name, min 4 chars to avoid noise)
-			else if (lowerName.length >= 4 && symLower.includes(lowerName)) {
-				matches.push({file, symbol: sym, score: 0.7});
-			}
-			// Fuzzy similarity (only for names of similar length)
-			else if (Math.min(symLower.length, lowerName.length) >= 4) {
-				const score = similarity(query, sym.name);
-				if (score >= 0.7) {
-					matches.push({file, symbol: sym, score});
+				// Exact match
+				if (sym.name === query) {
+					matches.push({file, symbol: sym, score: 1.0});
+				}
+				// Case-insensitive exact
+				else if (symLower === lowerName) {
+					matches.push({file, symbol: sym, score: 0.95});
+				}
+				// Substring match (query contained in symbol name, min 4 chars to avoid noise)
+				else if (lowerName.length >= 4 && symLower.includes(lowerName)) {
+					matches.push({file, symbol: sym, score: 0.7});
+				}
+				// Fuzzy similarity (only for names of similar length)
+				else if (Math.min(symLower.length, lowerName.length) >= 4) {
+					const score = similarity(query, sym.name);
+					if (score >= 0.7) {
+						matches.push({file, symbol: sym, score});
+					}
 				}
 			}
 		}

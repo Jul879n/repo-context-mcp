@@ -197,11 +197,11 @@ export const tools: Tool[] = [
 	{
 		name: 'search_symbol',
 		description:
-			'Search for a symbol (function, class, interface, type, const, enum) across ALL project files. Returns file location, type, signature, and exported status. Fuzzy matching supported. Use context_filter to find symbols by return type or param type (e.g. all functions returning Promise, or all functions that accept a User param).',
+			'Search for a symbol (function, class, interface, type, const, enum) across project files. Returns file location, type, signature, and exported status. Supports fuzzy matching and regex (e.g. "get.*Context"). Use path_filter to limit search scope. Use context_filter to find symbols by return type or param type.',
 		inputSchema: {
 			type: 'object',
 			properties: {
-				name: {type: 'string', description: 'Symbol name(s) to search for. Comma-separated for multi-search: "handleDelete,handleEdit". Supports fuzzy matching.'},
+				name: {type: 'string', description: 'Symbol name(s) to search for. Comma-separated for multi-search: "handleDelete,handleEdit". Supports fuzzy matching and regex: "get.*Context", "handle(Create|Update)".'},
 				type: {
 					type: 'string',
 					description: 'Filter by symbol type',
@@ -222,6 +222,10 @@ export const tools: Tool[] = [
 				context_lines: {
 					type: 'number',
 					description: 'Show the first N lines of each matched symbol body. Useful to preview code without reading the full file. Default: 0 (no preview).',
+				},
+				path_filter: {
+					type: 'string',
+					description: 'Filter files by path pattern. Supports glob ("src/**/*.ts") or substring ("src/tools"). Comma-separated for multiple patterns.',
 				},
 			},
 			required: ['name'],
